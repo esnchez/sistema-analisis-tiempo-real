@@ -9,7 +9,7 @@
 //!
 //! Demuestra que el proceso y su runtime responden, **no** que haya trabajo: con el broker
 //! vacío o el circuit breaker abierto el latido sigue, a propósito. Una caída de NATS o
-//! ClickHouse no debe reiniciar los pods (`docs/operations/deployment-and-scaling.md`).
+//! ClickHouse no debe reiniciar los pods (`docs/operaciones/despliegue-y-escalado.md`).
 //! El progreso se vigila con métricas (lag del consumidor).
 
 use std::path::PathBuf;

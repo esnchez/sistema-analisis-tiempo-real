@@ -2,10 +2,9 @@
 receivers:
   otlp:
     protocols:
+      # Solo gRPC: los servicios exportan con tonic (infrastructure/telemetry.rs).
       grpc:
         endpoint: 0.0.0.0:4317
-      http:
-        endpoint: 0.0.0.0:4318
 
 processors:
   # Primero: rechaza datos antes de quedarse sin memoria.

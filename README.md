@@ -60,37 +60,31 @@ Descripción de componentes:
 
 Para simular el entorno de cloud en local usamos un clúster propio de minikube (perfil `rtas`)
 con todo dentro: NATS, ClickHouse, gateway, procesador, OpenTelemetry Collector, Prometheus y
-Grafana. Guía completa: [docs/operations/kubernetes.md](docs/operations/kubernetes.md).
+Grafana. Guía completa con los comandos equivalentes: [docs/operaciones/kubernetes.md](docs/operaciones/kubernetes.md).
 
-1. Inicia minikube sin cambiar el contexto activo de `kubectl`:
+Todo se ejecuta con [Task](https://taskfile.dev) (`Taskfile.yml`); `task` lista las tareas. Las
+del clúster usan `--context rtas` y nunca cambian el contexto activo de `kubectl`.
+
 ```bash
-minikube start -p rtas --driver=docker --cpus=4 --memory=6144 --keep-context
+task cluster:start        # minikube `rtas` (con el arreglo para Docker lento en Windows)
+task monitoring:install   # Prometheus + Grafana
+task deploy               # imagen, carga en minikube, k8s/ y reinicio de gateway y procesador
+task status               # pods
+task grafana              # http://localhost:3000 (admin / admin), dashboard *RTAS · Pipeline en tiempo real*
 ```
 
-2. Instala la monitorización (Prometheus + Grafana):
+Pruebas:
+
 ```bash
-helm --kube-context rtas upgrade --install kube-prometheus-stack \
-  prometheus-community/kube-prometheus-stack -n monitoring --create-namespace \
-  -f k8s/monitoring/kube-prometheus-stack-values.yaml --version 92.10.1
+task test                       # unitarias
+task lint                       # formato y clippy
+task test:integration           # integración contra NATS y ClickHouse de Docker Compose
+task cluster:forward            # (otra terminal) port-forwards a NATS y ClickHouse del clúster
+task test:integration:cluster   # integración contra el clúster
 ```
 
-3. Construye la imagen y despliega el sistema:
-```bash
-docker build -t rtas-processor:dev processor
-minikube -p rtas image load rtas-processor:dev
-kubectl kustomize --load-restrictor LoadRestrictionsNone k8s \
-  | kubectl --context rtas apply --server-side -f -
-```
-
-4. Verifica el funcionamiento en los pods y en Grafana (dashboard *RTAS · Pipeline en tiempo real*):
-```bash
-kubectl --context rtas -n rtas get pods
-kubectl --context rtas -n rtas logs deploy/processor
-kubectl --context rtas -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
-```
-
-Para desarrollo rápido sin Kubernetes: `docker compose up -d --build`
-([entorno con Docker Compose](docs/operations/local-environment.md)).
+Para desarrollo rápido sin Kubernetes: `task env:up`
+([entorno con Docker Compose](docs/operaciones/entorno-local.md)).
 
 ## Despliegue a cloud
 
@@ -136,24 +130,19 @@ Para realizar pruebas de carga utilizaremos k6.
    - Duración total: 15 minutos
 
 2. Ejecuta el script de carga (k6 publica eventos por HTTP en el gateway de ingesta). En el
-   clúster de pruebas, como Job de Kubernetes:
+   clúster de pruebas, como Job de Kubernetes, o con Docker Compose:
 ```bash
-kubectl kustomize --load-restrictor LoadRestrictionsNone loadtest/k8s \
-  | kubectl --context rtas apply --server-side -f -
-kubectl --context rtas -n rtas logs -f job/k6
-```
-   O con Docker Compose:
-```bash
-docker compose --profile loadtest up -d --build
-docker compose --profile loadtest run --rm k6
+task load:cluster BATCH=1   # Job de k6 en `rtas` (RATE, RAMP, HOLD y BATCH se pueden cambiar)
+task load                   # Compose, con volúmenes limpios (BATCH=1 por defecto)
+task load:smoke             # humo en Compose, ~40 s
 ```
 
 3. Observa los resultados utilizando Prometheus y Grafana:
    - k6 envía sus métricas a Prometheus (remote write) junto con las del pipeline (lag de NATS, eventos guardados, frescura, DLQ)
-   - Dashboard provisionado en Grafana: <http://localhost:3000>, carpeta *Pruebas de carga*
+   - Dashboard provisionado en Grafana: <http://localhost:3000>, *Prueba de carga · pipeline de extremo a extremo* (carpeta *Pruebas de carga* en Compose, *General* en Kubernetes)
    - Al terminar, k6 concilia lo aceptado con lo guardado en ClickHouse y la DLQ
 
-El script de prueba de carga se encuentra en `loadtest/k6.js`. Detalle y resultados: [docs/operations/load-testing.md](docs/operations/load-testing.md). Documentación técnica: [docs/](docs/README.md).
+El script de prueba de carga se encuentra en `loadtest/k6.js`. Detalle y resultados: [docs/operaciones/pruebas.md](docs/operaciones/pruebas.md). Documentación técnica: [docs/](docs/README.md).
 
 ## Métricas objetivo
 

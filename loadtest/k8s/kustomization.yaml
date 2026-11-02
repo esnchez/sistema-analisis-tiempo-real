@@ -9,7 +9,7 @@
 # Si se cruza un threshold (p. ej. p99 > 200 ms), k6 sale con error y el Job queda `Failed`:
 # el resultado está en los logs (thresholds y conciliación).
 #
-# Parámetros (RATE, RAMP, HOLD, BATCH…) en k6-job.yaml; ver docs/operations/load-testing.md.
+# Parámetros (RATE, RAMP, HOLD, BATCH…) en k6-job.yaml; ver docs/operaciones/pruebas.md.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: rtas

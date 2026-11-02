@@ -1,6 +1,6 @@
 # ClickHouse a escala
 
-Riesgos al crecer y cómo se cubren. El diseño de la tabla está en [clickhouse-table.md](clickhouse-table.md).
+Riesgos al crecer y cómo se cubren. El diseño de la tabla está en [tabla-events.md](tabla-events.md).
 
 | Punto | Riesgo | Medida |
 |---|---|---|

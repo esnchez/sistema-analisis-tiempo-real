@@ -1,7 +1,7 @@
 # Garantías de entrega y deduplicación
 
 Cómo se consigue que cada evento cuente **exactamente una vez** en el análisis sin
-transacciones entre NATS y ClickHouse. Términos en [glosario](../glossary.md).
+transacciones entre NATS y ClickHouse. Términos en [glosario](../glosario.md).
 
 ## Requisitos que guían el diseño
 
@@ -14,7 +14,7 @@ transacciones entre NATS y ClickHouse. Términos en [glosario](../glossary.md).
 | Orden | **no requerido** | paralelismo libre, sin particionar por clave |
 
 > [!NOTE]
-> Las cifras son estimaciones de partida; se validan con las [pruebas de carga](../operations/load-testing.md).
+> Las cifras son estimaciones de partida; se validan con las [pruebas de carga](../operaciones/pruebas.md).
 
 > [!IMPORTANT]
 > **Idea central:** el análisis agrega por `occurred_at` (*tiempo de evento*), no por orden de
@@ -44,7 +44,7 @@ Un duplicado puede aparecer en 3 puntos; cada uno tiene su defensa:
 | 4 | todo lo anterior falla | `ReplacingMergeTree` colapsa por clave de ordenación al fusionar | tabla `events` | eventual, sin límite |
 
 La DLQ también es idempotente: `Nats-Msg-Id = <stream>:<secuencia>` del mensaje original, con una
-`duplicate_window` de 10 min > *AckWait* ([fallos](failure-handling.md#dlq)).
+`duplicate_window` de 10 min > *AckWait* ([fallos](fallos-y-reintentos.md#dlq)).
 
 > [!IMPORTANT]
 > **Reglas que no se pueden romper**
@@ -64,4 +64,4 @@ La DLQ también es idempotente: `Nats-Msg-Id = <stream>:<secuencia>` del mensaje
 
 ## Relacionado
 
-- [Topología de NATS](nats-topology.md) · [Fallos y reintentos](failure-handling.md) · [Tabla de ClickHouse](../storage/clickhouse-table.md)
+- [Topología de NATS](topologia-nats.md) · [Fallos y reintentos](fallos-y-reintentos.md) · [Tabla de ClickHouse](tabla-events.md)

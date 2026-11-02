@@ -8,10 +8,8 @@ target/
 .DS_Store
 Thumbs.db
 
-# Variables locales y secretos
-.env
-.env.*
-
-# Salidas de pruebas de carga y logs locales
+# Logs locales
 *.log
-loadtest/results/
+
+# Overlays temporales de Task
+.task/

@@ -2,6 +2,8 @@
 
 Una única tabla ancha y desnormalizada para análisis OLAP sin joins.
 Esquema: `processor/config/clickhouse.sql` · fila en Rust: `infrastructure/clickhouse/row.rs` (`EventRow`).
+Conexión (`infrastructure/clickhouse/config.rs`): `CLICKHOUSE_URL` (`http://localhost:8123`),
+`CLICKHOUSE_DATABASE` (`default`), `CLICKHOUSE_USER` (`default`), `CLICKHOUSE_PASSWORD` (vacía).
 
 ```
 SourceEvent (anidado)                         fila de `events` (plana)
@@ -23,7 +25,7 @@ SourceEvent (anidado)                         fila de `events` (plana)
 | Enums → `LowCardinality(String)` | compacto y sin `ALTER` al añadir variantes |
 | Etiquetas de enum = nombre serde | lo almacenado coincide con el JSON de las fuentes |
 | `country` (IP) ≠ `profile_country` (declarado) | dos significados distintos |
-| `ReplacingMergeTree(ingested_at)` | colapsa duplicados por clave al fusionar ([garantías](../processing/delivery-guarantees.md)) |
+| `ReplacingMergeTree(ingested_at)` | colapsa duplicados por clave al fusionar ([garantías](garantias-de-entrega.md)) |
 | `ORDER BY (event_type, toStartOfHour(occurred_at), user_id, event_id)` | consultas típicas por tipo y rango temporal; termina en `event_id` para deduplicar por evento |
 | `PARTITION BY toDate(occurred_at)` | ~2 TB/día: borrar/mover días completos |
 | `non_replicated_deduplication_window = 1000` | descarta el reintento de un INSERT ya escrito |
@@ -37,4 +39,4 @@ SourceEvent (anidado)                         fila de `events` (plana)
 
 1. `config/clickhouse.sql`: `ALTER TABLE events ADD COLUMN … DEFAULT …` (solo cambios aditivos).
 2. `EventRow` en `row.rs` + su mapeo en `from_event`.
-3. Desplegar el procesador **después** del `ALTER` ([evolución del esquema](../operations/schema-evolution.md)).
+3. Desplegar el procesador **después** del `ALTER` ([evolución del esquema](../operaciones/evolucion-del-esquema.md)).

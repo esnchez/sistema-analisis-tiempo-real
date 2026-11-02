@@ -2,7 +2,7 @@
 # dashboards de Grafana. La incluye `k8s/kustomization.yaml`; no se aplica sola.
 #
 # El stack (Prometheus + Grafana) se instala aparte con Helm y
-# `kube-prometheus-stack-values.yaml` (ver docs/operations/kubernetes.md).
+# `kube-prometheus-stack-values.yaml` (ver docs/operaciones/kubernetes.md).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

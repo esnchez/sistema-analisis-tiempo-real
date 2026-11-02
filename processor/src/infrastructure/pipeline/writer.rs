@@ -60,9 +60,8 @@ pub(super) async fn writers<D, H, Q>(
         tasks.spawn(async move {
             let _permit = permit;
             let bytes = batch.deliveries.iter().map(|d| d.payload().len()).sum();
-            writer.metrics.batch_started(batch.len(), bytes);
+            let _in_progress = writer.metrics.batch_started(batch.len(), bytes);
             writer.write(batch).await;
-            writer.metrics.batch_finished();
         });
         while let Some(result) = tasks.try_join_next() {
             report(result);

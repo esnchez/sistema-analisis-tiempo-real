@@ -33,21 +33,14 @@ const DATA_ERROR_CODES: &[u32] = &[
 #[derive(Clone)]
 pub struct ClickHouseEventRepository {
     client: Client,
-    table: String,
 }
 
 impl ClickHouseEventRepository {
-    pub const DEFAULT_TABLE: &str = "events";
+    /// Tabla ancha de eventos (`config/clickhouse.sql`).
+    pub const TABLE: &str = "events";
 
     pub fn new(client: Client) -> Self {
-        Self::with_table(client, Self::DEFAULT_TABLE)
-    }
-
-    pub fn with_table(client: Client, table: impl Into<String>) -> Self {
-        Self {
-            client,
-            table: table.into(),
-        }
+        Self { client }
     }
 }
 
@@ -60,7 +53,7 @@ impl EventRepository for ClickHouseEventRepository {
         let ingested_at = Utc::now();
         let mut insert = self
             .client
-            .insert::<EventRow>(&self.table)
+            .insert::<EventRow>(Self::TABLE)
             .await
             .map_err(classify)?
             .with_setting("insert_deduplication_token", deduplication_token(events));

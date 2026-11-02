@@ -8,9 +8,9 @@ y la clasificación en `infrastructure/clickhouse/repository.rs`.
 | Fallo | Ejemplos | Tipo | Acción |
 |---|---|---|---|
 | Mensaje venenoso | JSON inválido, `DomainError`, tipo de evento desconocido | permanente (mensaje) | DLQ + `term` · **no bloquea el lote** |
-| Fuera de ventana | `occurred_at` < now − 7 d o > now + 5 min | permanente (mensaje) | DLQ + `term` ([por qué](../storage/clickhouse-at-scale.md)) |
+| Fuera de ventana | `occurred_at` < now − 7 d o > now + 5 min | permanente (mensaje) | DLQ + `term` ([por qué](clickhouse-a-escala.md)) |
 | ClickHouse transitorio | red, timeout, 5xx, `TOO_MANY_PARTS` (252), `MEMORY_LIMIT_EXCEEDED` (241), tabla/columna inexistente, **cualquier código desconocido** | transitorio | reintento en proceso: mismo lote y token, backoff exponencial + jitter |
-| ClickHouse rechaza los datos | `CANNOT_PARSE_TEXT` (6), `TYPE_MISMATCH` (53), `CANNOT_CONVERT_TYPE` (70), `INCORRECT_DATA` (117)… | permanente (lote) | **bisección** hasta aislar las filas malas → DLQ; se inserta el resto |
+| ClickHouse rechaza los datos | `CANNOT_PARSE_TEXT` (6), `CANNOT_PARSE_INPUT_ASSERTION_FAILED` (27), `TYPE_MISMATCH` (53), `ARGUMENT_OUT_OF_BOUND` (69), `CANNOT_CONVERT_TYPE` (70), `INCORRECT_DATA` (117), `TOO_LARGE_STRING_SIZE` (131) (`DATA_ERROR_CODES`), y errores de codificación del cliente | permanente (lote) | **bisección** hasta aislar las filas malas → DLQ; se inserta el resto |
 | Pod muere a mitad de lote | OOM, despliegue, nodo caído | — | nada: sin ack → reentrega tras *AckWait* → dedup |
 | NATS desconecta | red | transitorio | reconexión del cliente; acks perdidos → reentrega → dedup |
 | ClickHouse caído mucho tiempo | incidente | transitorio largo | circuit breaker abierto → sin fetch → backlog en JetStream |
@@ -37,6 +37,17 @@ intento 1 ──✗──▶ backoff en proceso (0,5 s, 1 s, 2 s, 4 s; 5 intento
 DLQ solo para lo que nunca funcionará: venenosos, fuera de ventana, filas rechazadas
 ```
 
+Valores fijos en código: 5 intentos, backoff inicial 0,5 s duplicando hasta un máximo de 10 s,
+con *equal jitter* (cada espera entre la mitad y el total) para que los writers no reintenten a
+la vez (`retry.rs`). Circuit breaker: se abre tras 3 lotes seguidos con reintentos agotados y
+se enfría 30 s (`breaker.rs`).
+
+| Caso | Efecto en el breaker |
+|---|---|
+| lote insertado | éxito: lo cierra |
+| lote rechazado por datos (bisección) | **éxito**: el almacén respondió |
+| reintentos agotados | fallo. Si ocurre a mitad de una bisección, las mitades aún no escritas se abandonan sin ack y se reentregan enteras |
+
 > [!TIP]
 > **En proceso primero**: mantiene el lote idéntico (dedup de inserción efectiva) y es barato.
 > Tras el enfriamiento el circuito queda *semiabierto*: el primer éxito lo cierra y el primer
@@ -61,7 +72,8 @@ El mensaje se termina (`term`) **solo después** de que la DLQ confirme; si la D
 en cada reentrega. Si el mensaje vuelve antes de terminarse (pod caído entre la DLQ y el `term`,
 mensaje que esperó en el *prefetch* más que *AckWait*), JetStream descarta la segunda copia. La
 `duplicate_window` de la DLQ (10 min) debe superar *AckWait* (120 s); si no, el procesador avisa al
-arrancar.
+arrancar. Excepción: si el cliente no puede leer los metadatos del mensaje (`info()`), la copia
+se publica sin `Nats-Msg-Id` y en ese caso la DLQ no es idempotente.
 
 ## Capacidad del backlog
 

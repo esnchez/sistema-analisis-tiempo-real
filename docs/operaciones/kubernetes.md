@@ -4,15 +4,14 @@ Todo el sistema y su monitorización dentro de un clúster propio de minikube (p
 separado de otros clústeres locales. Manifiestos en `k8s/`.
 
 ```
- namespace rtas
+ namespace rtas                                        namespace monitoring
    gateway ×2 ──▶ nats ──▶ processor ×2 ──▶ clickhouse
       │                        │
       └──── OTLP ──▶ otel-collector ◀──┘
-                          │ :8889
- namespace monitoring     ▼
-   nats-exporter :7777 ──▶ Prometheus ──▶ Grafana
-   clickhouse    :9363 ──▶     ▲
-   k6 (Job)  ── remote write ──┘
+                          │ :8889 ───────────────────▶ Prometheus ──▶ Grafana
+   nats-exporter :7777 (sidecar de nats) ────────────▶     ▲
+   clickhouse    :9363 ──────────────────────────────▶     │
+   k6 (Job)  ── remote write ──────────────────────────────┘
 ```
 
 | Directorio | Contenido |
@@ -20,10 +19,13 @@ separado de otros clústeres locales. Manifiestos en `k8s/`.
 | `k8s/` | el sistema: NATS, ClickHouse, gateway, procesador, colector OTel y sus ServiceMonitors |
 | `k8s/config/` | configuración de NATS, ClickHouse y el colector (montada como ConfigMaps) |
 | `k8s/monitoring/` | valores del chart `kube-prometheus-stack`, alertas y dashboards (los incluye `k8s/`) |
-| `k8s/monitoring/grafana/`, `prometheus/` | dashboards (Kubernetes y Compose) y configuración de Compose |
+| `k8s/monitoring/grafana/dashboards/` | dashboards (Kubernetes; Compose reutiliza el de la prueba de carga) |
 | `loadtest/k8s/` | Job de k6 (script: `loadtest/k6.js`) |
 
 ## Puesta en marcha
+
+Con Task: `task cluster:start`, `task monitoring:install` y `task deploy` (las tres usan
+`--context rtas`; ver `task --list`). Los pasos equivalentes:
 
 ```bash
 # 1. Clúster propio; --keep-context no cambia el contexto activo de kubectl
@@ -56,41 +58,20 @@ kubectl --context rtas -n rtas port-forward svc/gateway 8080                    
 
 Si el puerto local está ocupado (p. ej. por otro clúster), usar otro: `3001:80`.
 
-Dashboards en Grafana: **RTAS · Pipeline en tiempo real** (servicio) y **Prueba de carga** (k6).
+Dashboards en Grafana (carpeta *General*): **RTAS · Pipeline en tiempo real** (servicio) y
+**Prueba de carga · pipeline de extremo a extremo** (k6).
 Alertas: Prometheus → *Alerts* (sin Alertmanager en pruebas).
 
 ## Pruebas
 
-```bash
-# Unitarias
-cd processor && cargo test
-
-# Integración contra los servicios del clúster (en otras dos terminales)
-kubectl --context rtas -n rtas port-forward svc/nats 4222
-kubectl --context rtas -n rtas port-forward svc/clickhouse 8123
-CLICKHOUSE_PASSWORD=clickhouse cargo test --test integration -- --ignored
-
-# Carga de extremo a extremo (Job de k6 dentro del clúster)
-kubectl --context rtas -n rtas delete job k6 --ignore-not-found
-kubectl kustomize --load-restrictor LoadRestrictionsNone loadtest/k8s \
-  | kubectl --context rtas apply --server-side -f -
-kubectl --context rtas -n rtas logs -f job/k6        # al final: conciliación OK / FALLO
-```
-
-El escenario (`RATE`, `RAMP`, `HOLD`, `BATCH`) se cambia en `loadtest/k8s/k6-job.yaml`.
-Si se cruza un threshold (p. ej. p99 > 200 ms) k6 sale con error y el Job queda `Failed`;
-el resultado completo está en los logs. Resultados: [pruebas de carga](load-testing.md).
-
-> [!CAUTION]
-> No cambiar el clúster (rollouts, reinicios de ClickHouse) mientras corre una prueba: la
-> conciliación cuenta los mensajes nuevos de la DLQ desde que empieza, así que el tráfico de
-> otra ejecución o los reintentos de un ClickHouse reiniciándose la falsean.
+Unitarias, integración contra los servicios del clúster y el Job de k6, con sus resultados:
+[pruebas](pruebas.md#ejecutar-en-kubernetes).
 
 ## Monitorización
 
 | Fuente | Cómo llega a Prometheus | Métricas |
 |---|---|---|
-| gateway, procesador | OTLP/gRPC → colector → `:8889` (ServiceMonitor) | ver [observabilidad](observability.md) |
+| gateway, procesador | OTLP/gRPC → colector → `:8889` (ServiceMonitor) | ver [observabilidad](observabilidad.md) |
 | NATS | sidecar `prometheus-nats-exporter` `:7777` | lag, acks pendientes, reentregas, tamaño de streams |
 | ClickHouse | endpoint propio `:9363` | filas insertadas, partes por partición |
 | pods | cAdvisor (kube-prometheus-stack) | CPU, memoria, espera de CPU (PSI) |
@@ -104,11 +85,12 @@ el resultado completo está en los logs. Resultados: [pruebas de carga](load-tes
 | gateway | `GET /health` | `GET /health` |
 | nats | `/healthz` | `/healthz?js-enabled-only=true` |
 | clickhouse | `/ping` | `/ping` |
+| otel-collector | TCP `:4317` | TCP `:4317` |
 
 > [!NOTE]
 > El latido solo demuestra que el proceso y su runtime responden. Con NATS o ClickHouse
 > caídos sigue latiendo a propósito: reiniciar no arreglaría nada
-> ([despliegue](deployment-and-scaling.md)). Un pipeline atascado se detecta por el lag.
+> ([despliegue](despliegue-y-escalado.md)). Un pipeline atascado se detecta por el lag.
 
 ## Recursos (clúster de 4 CPU / 6 GiB)
 
@@ -134,6 +116,11 @@ Problemas encontrados al montar el entorno y cómo se resolvieron.
 | Síntoma | Causa | Solución |
 |---|---|---|
 | `minikube start` falla con `DRV_UNSUPPORTED_OS: The driver 'docker' is not supported on windows/amd64` | el mensaje engaña: minikube da 20 s a `docker system info`, que en Windows tarda 20–50 s porque consulta cada plugin del CLI de Docker (1,5–3,7 s cada uno). `--force` no lo evita | lanzar `docker system info` una o dos veces justo antes (se vuelve más rápido) y repetir el `start` |
+| Con un perfil ya creado, el mismo problema aparece como `The driver '' is not supported` (2026-11-02: `docker system info` tardaba 21–27 s y repetirlo no bastó) | igual que el anterior; minikube no llega a leer el driver del perfil | `task cluster:start` lo resuelve: si `minikube start` falla, arranca el contenedor del nodo con `docker start rtas` |
+| Tras `docker start rtas`: API server sin respuesta (`EOF`) | sin `minikube start` nadie arranca `containerd` ni `kubelet` dentro del nodo | `docker exec rtas systemctl start containerd kubelet` (lo hace `task cluster:start`) |
+| Tras arrancar el nodo a mano: CoreDNS sin `Ready`, procesador y gateway en `CrashLoopBackOff` (`Temporary failure in name resolution`), operador de Prometheus caído | falta `control-plane.minikube.internal` en `/etc/hosts` del nodo: kube-proxy no llega al API server y no crea las reglas de los Services (`10.96.0.1` rechaza conexiones) | añadir la entrada antes de arrancar `kubelet` (lo hace `task cluster:start`) y reiniciar los pods afectados. **No borrar el pod `storage-provisioner`**: es un pod suelto y no se recrea (`minikube -p rtas addons enable storage-provisioner`) |
+| `minikube update-context` deja `rtas` como contexto activo | es su comportamiento | `task cluster:start` restaura el contexto anterior |
+| Docker Desktop deja de responder (`500 Internal Server Error` en toda la API) tras una prueba de carga larga | motor de Docker Desktop colgado | reiniciar Docker Desktop |
 | `minikube image build` falla: `failed to read dockerfile: open Dockerfile` | desde Windows envía un Dockerfile vacío (`transferring dockerfile: 2B`), con ruta relativa o absoluta | `docker build` en el host + `minikube image load` |
 | NATS en `CrashLoopBackOff`: `flag provided but not defined: -max_file_store` | el tope de disco de JetStream no existe como opción de línea de comandos | `k8s/config/nats.conf` con `jetstream { max_file_store }` |
 | Job de k6 en `CreateContainerConfigError: secret "clickhouse" not found` | kustomize añade un sufijo hash al Secret y la kustomization de `loadtest/k8s` no lo conoce | Secret con nombre fijo (`disableNameSuffixHash`) |

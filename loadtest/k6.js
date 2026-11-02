@@ -7,7 +7,7 @@
 // Al terminar, `teardown` espera a que el procesador vacíe la cola y `handleSummary`
 // concilia: eventos aceptados por el gateway = eventos en ClickHouse + eventos en la DLQ.
 //
-// Uso (ver docs/operations/load-testing.md):
+// Uso (ver docs/operaciones/pruebas.md):
 //   docker compose --profile loadtest run --rm k6                         # escenario del README
 //   docker compose --profile loadtest run --rm -e RATE=50 -e RAMP=10s -e HOLD=20s k6   # humo
 

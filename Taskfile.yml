@@ -1,0 +1,233 @@
+# Punto de entrada para pruebas, entornos, despliegue y pruebas de carga. `task` (o `task --list`)
+# muestra todas las tareas. Requiere Task 3.x (https://taskfile.dev). Funciona igual en Windows
+# (PowerShell o Git Bash), Linux y macOS: los comandos los ejecuta el intérprete propio de Task.
+#
+# Las tareas del clúster usan siempre `--context rtas`: nunca cambian el contexto activo de kubectl.
+version: "3"
+
+vars:
+  CTX: rtas
+  KUBECTL: kubectl --context rtas
+  IMAGE: rtas-processor:dev
+  # Las pruebas de integración están marcadas #[ignore] para que `cargo test` no las lance.
+  INTEGRATION: cargo test --test integration -- --ignored
+
+tasks:
+  default:
+    silent: true
+    cmds:
+      - task --list
+
+  # ---------------------------------------------------------------------------------------------
+  # Desarrollo
+  # ---------------------------------------------------------------------------------------------
+
+  test:
+    desc: Pruebas unitarias (sin servicios)
+    dir: processor
+    cmds:
+      - cargo test
+
+  lint:
+    desc: Formato y clippy
+    dir: processor
+    cmds:
+      - cargo fmt --check
+      - cargo clippy --all-targets -- -D warnings
+
+  # ---------------------------------------------------------------------------------------------
+  # Docker Compose (docs/operaciones/entorno-local.md)
+  # ---------------------------------------------------------------------------------------------
+
+  env:up:
+    desc: Arranca el pipeline en Docker Compose (NATS, ClickHouse, procesador, gateway)
+    cmds:
+      - docker compose up -d --build --wait
+
+  env:monitoring:
+    desc: "Pipeline + Prometheus y Grafana en Compose (http://localhost:3000)"
+    cmds:
+      - docker compose --profile loadtest up -d --build --wait
+
+  env:reset:
+    desc: Borra volúmenes y vuelve a arrancar (recrea el esquema de ClickHouse y los streams)
+    cmds:
+      - docker compose --profile loadtest down -v
+      - docker compose up -d --build --wait
+
+  env:down:
+    desc: Para Compose y borra sus volúmenes
+    cmds:
+      - docker compose --profile loadtest down -v
+
+  env:logs:
+    desc: Logs del procesador y el gateway (primer plano)
+    cmds:
+      - docker compose logs -f processor gateway
+
+  test:integration:
+    desc: Pruebas de integración contra NATS y ClickHouse de Compose (los arranca si hace falta)
+    cmds:
+      - docker compose up -d --wait nats clickhouse
+      - task: integration:run
+
+  integration:run:
+    internal: true
+    dir: processor
+    env:
+      CLICKHOUSE_PASSWORD: clickhouse
+    cmds:
+      - "{{.INTEGRATION}}"
+
+  # ---------------------------------------------------------------------------------------------
+  # Pruebas de carga en Compose (docs/operaciones/pruebas.md)
+  # ---------------------------------------------------------------------------------------------
+
+  load:smoke:
+    desc: "Humo en Compose: 50 req/s × 10 eventos, ~40 s"
+    deps: [env:monitoring]
+    cmds:
+      - docker compose --profile loadtest run --rm -e RATE=50 -e RAMP=10s -e HOLD=30s k6
+
+  load:
+    desc: "Escenario del README en Compose: 0 → 2 000 req/s en 5 min + 10 min (BATCH=1 por defecto; BATCH=10 satura en local)"
+    vars:
+      BATCH: '{{.BATCH | default "1"}}'
+    cmds:
+      # Volúmenes limpios: la conciliación cuenta lo nuevo en la DLQ desde el arranque.
+      - docker compose --profile loadtest down -v
+      - docker compose --profile loadtest up -d --build --wait
+      - docker compose --profile loadtest run --rm -e BATCH={{.BATCH}} k6
+
+  # ---------------------------------------------------------------------------------------------
+  # Clúster local de minikube `rtas` (docs/operaciones/kubernetes.md)
+  # ---------------------------------------------------------------------------------------------
+
+  cluster:start:
+    desc: "Arranca minikube `rtas` sin cambiar el contexto activo (con el arreglo para Docker lento en Windows)"
+    vars:
+      CURRENT:
+        sh: kubectl config current-context
+    cmds:
+      - task: cluster:start:minikube
+      - task: cluster:start:fallback
+      - kubectl config use-context {{.CURRENT}}
+      - "{{.KUBECTL}} wait --for=condition=Ready node/rtas --timeout=300s"
+
+  cluster:start:minikube:
+    internal: true
+    # minikube da 20 s a `docker system info`, que en Windows puede tardar más
+    # (ver "Hallazgos" en kubernetes.md). Si falla, cluster:start:fallback arranca el nodo a mano.
+    ignore_error: true
+    status:
+      - '[ "$(docker inspect -f "{{`{{.State.Running}}`}}" rtas)" = "true" ]'
+    cmds:
+      - docker system info > /dev/null
+      - minikube start -p rtas --driver=docker --cpus=4 --memory=6144 --keep-context
+
+  cluster:start:fallback:
+    internal: true
+    status:
+      - "{{.KUBECTL}} get --raw /readyz > /dev/null"
+    cmds:
+      - docker start rtas
+      # Sin `minikube start` nadie escribe esta entrada: sin ella kube-proxy no llega al API
+      # server, no hay reglas para los Services y CoreDNS y los pods que usan la API fallan.
+      - >-
+        docker exec rtas sh -c 'grep -q control-plane.minikube.internal /etc/hosts ||
+        echo "$(hostname -i) control-plane.minikube.internal" >> /etc/hosts'
+      # Ni arranca los servicios del nodo.
+      - docker exec rtas systemctl start containerd kubelet
+      # El puerto del API server cambia al reiniciar el contenedor; update-context lo corrige
+      # (y cambia el contexto activo, que cluster:start restaura después).
+      - minikube -p rtas update-context
+
+  cluster:stop:
+    desc: Para minikube `rtas` (conserva datos y despliegue)
+    cmds:
+      - minikube stop -p rtas
+
+  monitoring:install:
+    desc: Instala o actualiza Prometheus y Grafana (kube-prometheus-stack) en `rtas`
+    cmds:
+      - helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+      - >-
+        helm --kube-context {{.CTX}} upgrade --install kube-prometheus-stack
+        prometheus-community/kube-prometheus-stack -n monitoring --create-namespace
+        -f k8s/monitoring/kube-prometheus-stack-values.yaml --version 92.10.1 --wait
+
+  deploy:
+    desc: Construye la imagen, la carga en `rtas`, aplica k8s/ y reinicia gateway y procesador
+    cmds:
+      - docker build -t {{.IMAGE}} processor
+      - minikube -p rtas image load --overwrite=true {{.IMAGE}}
+      # El esquema SQL está en processor/, fuera de k8s/: de ahí LoadRestrictionsNone.
+      - kubectl kustomize --load-restrictor LoadRestrictionsNone k8s | {{.KUBECTL}} apply --server-side -f -
+      - "{{.KUBECTL}} -n rtas rollout restart deploy/processor deploy/gateway"
+      - "{{.KUBECTL}} -n rtas rollout status deploy/processor --timeout=300s"
+      - "{{.KUBECTL}} -n rtas rollout status deploy/gateway --timeout=300s"
+      - "{{.KUBECTL}} -n rtas get pods"
+
+  status:
+    desc: Pods de `rtas` y de la monitorización
+    cmds:
+      - "{{.KUBECTL}} get pods -n rtas -o wide"
+      - "{{.KUBECTL}} get pods -n monitoring"
+
+  grafana:
+    desc: "Grafana en http://localhost:3000 (admin / admin); primer plano"
+    cmds:
+      - "{{.KUBECTL}} -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80"
+
+  prometheus:
+    desc: "Prometheus en http://localhost:9090; primer plano"
+    cmds:
+      - "{{.KUBECTL}} -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090"
+
+  cluster:forward:
+    desc: "Port-forwards para `task test:integration:cluster`: NATS :4222/:8222 y ClickHouse :8123 (primer plano)"
+    deps: [forward:nats, forward:clickhouse]
+
+  forward:nats:
+    internal: true
+    cmds:
+      - "{{.KUBECTL}} -n rtas port-forward svc/nats 4222 8222"
+
+  forward:clickhouse:
+    internal: true
+    cmds:
+      - "{{.KUBECTL}} -n rtas port-forward svc/clickhouse 8123"
+
+  test:integration:cluster:
+    desc: "Pruebas de integración contra NATS y ClickHouse del clúster (`task cluster:forward` en otra terminal)"
+    preconditions:
+      - sh: curl -sf http://127.0.0.1:8222/healthz > /dev/null
+        msg: "Falta el port-forward a NATS. Ejecuta `task cluster:forward` en otra terminal (y para Compose)."
+      - sh: curl -sf http://127.0.0.1:8123/ping > /dev/null
+        msg: "Falta el port-forward a ClickHouse. Ejecuta `task cluster:forward` en otra terminal (y para Compose)."
+    cmds:
+      - task: integration:run
+
+  load:cluster:
+    desc: "Job de k6 en `rtas`: escenario del README (RATE=2000 RAMP=5m HOLD=10m BATCH=10 por defecto; p. ej. task load:cluster BATCH=1)"
+    vars:
+      RATE: '{{.RATE | default "2000"}}'
+      RAMP: '{{.RAMP | default "5m"}}'
+      HOLD: '{{.HOLD | default "10m"}}'
+      BATCH: '{{.BATCH | default "10"}}'
+    cmds:
+      - "{{.KUBECTL}} -n rtas delete job k6 --ignore-not-found"
+      # Overlay temporal sobre loadtest/k8s que solo cambia el escenario del Job.
+      - mkdir -p .task/load-cluster
+      - >-
+        printf 'resources:\n  - ../../loadtest/k8s\npatches:\n  - target:\n      kind: Job\n      name: k6\n    patch: |-\n      - op: replace\n        path: /spec/template/spec/containers/0/env/0/value\n        value: "%s"\n      - op: replace\n        path: /spec/template/spec/containers/0/env/1/value\n        value: "%s"\n      - op: replace\n        path: /spec/template/spec/containers/0/env/2/value\n        value: "%s"\n      - op: replace\n        path: /spec/template/spec/containers/0/env/3/value\n        value: "%s"\n'
+        "{{.RATE}}" "{{.RAMP}}" "{{.HOLD}}" "{{.BATCH}}" > .task/load-cluster/kustomization.yaml
+      - kubectl kustomize --load-restrictor LoadRestrictionsNone .task/load-cluster | {{.KUBECTL}} apply --server-side -f -
+      - "{{.KUBECTL}} -n rtas wait --for=condition=ready pod -l job-name=k6 --timeout=180s"
+      - "{{.KUBECTL}} -n rtas logs -f job/k6"
+
+  cluster:clean:
+    desc: Borra el namespace `rtas` (sistema y datos; la monitorización se queda)
+    prompt: "¿Borrar el namespace rtas con sus PVC?"
+    cmds:
+      - "{{.KUBECTL}} delete namespace rtas"

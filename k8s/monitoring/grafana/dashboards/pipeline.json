@@ -1113,8 +1113,8 @@
             "uid": "${datasource}"
           },
           "refId": "C",
-          "expr": "sum(rate(jetstream_consumer_num_redelivered{consumer_name=\"processor\"}[$__rate_interval]))",
-          "legendFormat": "reentregas/s"
+          "expr": "max(jetstream_consumer_num_redelivered{consumer_name=\"processor\"})",
+          "legendFormat": "reentregados sin ack"
         }
       ]
     },

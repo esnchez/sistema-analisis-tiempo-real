@@ -34,7 +34,7 @@ Cómo un único proceso consume más mensajes de forma segura. Código: `infrast
 
 | Etapa | Archivo | Paralelismo | Corte / límite |
 |---|---|---|---|
-| intake | `intake.rs` | 1 tarea | pide solo el hueco libre (`NATS_FETCH_BATCH`) |
+| intake | `intake.rs` + `nats/source.rs` | 1 tarea | el consumidor *pull* pide lotes fijos de `NATS_FETCH_BATCH` (1 000) y solo vuelve a pedir cuando se consumen; el canal de entrada (10 000 eventos) llena ⇒ deja de consumir |
 | batcher | `batcher.rs` | 1 tarea | **filas ≥ 50k · bytes ≥ 32 MB · antigüedad ≥ 2 s** (lo primero) |
 | writers | `writer.rs` | K tareas (`Semaphore`) | cada una = 1 comando `RecordEvents` |
 | ack | `writer.rs` | dentro del writer | tras `INSERT` OK |
@@ -47,15 +47,15 @@ Cómo un único proceso consume más mensajes de forma segura. Código: `infrast
 
 | Riesgo al añadir concurrencia | Salvaguarda |
 |---|---|
-| Memoria sin límite | canales acotados + `Semaphore(K)` → techo ≈ canales + lote × (K + 1) |
+| Memoria sin límite | canales acotados + `Semaphore(K)` → techo ≈ *prefetch* + canal de entrada + lote × (K + 3) ([memoria](memoria.md)) |
 | **Acks fuera de orden**: el lote 2 termina antes que el 1 | `AckPolicy::Explicit`. **Nunca `All`**: confirmaría mensajes del lote 1 aún no guardados |
 | Ack antes de persistir | los handles de ack viajan **dentro** de la tarea del writer; solo se usan tras `Ok` |
-| La cola local consume *AckWait* → reentrega en curso | no sobre-pedir; *AckWait* ≫ `PipelineConfig::max_hold_time()` (aviso al arrancar si no) |
+| La cola local consume *AckWait* → reentrega en curso | no sobre-pedir; *AckWait* ≫ `PipelineConfig::max_hold_time()` = antigüedad del lote + backoff máximo acumulado (aviso al arrancar si `2 × max_hold_time > AckWait`) |
 | Estado mutable compartido | ninguno: datos por canales; handler tras `Arc`; `Client` de ClickHouse con pool propio |
 | Reintentos ocupan un writer | deseado: K reintentando ⇒ backpressure natural; *circuit breaker* para fallar rápido |
 | El reintento necesita el lote | `RecordEvents { events: Arc<[SourceEvent]> }`: clon barato y lote idéntico |
-| `panic` en una tarea | `JoinSet` lo reporta; sin ack ⇒ reentrega ⇒ dedup |
-| SIGTERM pierde un lote | parar fetch → cerrar lote → esperar `JoinSet` → ack → salir |
+| `panic` en una tarea | `JoinSet` lo reporta; sin ack ⇒ reentrega ⇒ dedup. `processor.writers.busy` baja igualmente (guard `BatchInProgress`) |
+| SIGTERM pierde un lote | parar fetch → cerrar lote → cada writer inserta y hace ack dentro de su tarea → esperar `JoinSet` → salir. Los mensajes del *prefetch* aún no procesados se sueltan sin `nak`: NATS los reentrega tras *AckWait* |
 | Más pods ⇒ demasiados INSERT/s | escalar **tamaño de lote**, no K |
 
 > [!WARNING]
@@ -66,10 +66,10 @@ Cómo un único proceso consume más mensajes de forma segura. Código: `infrast
 
 | # | Parámetro | Variable | Equilibrio |
 |---|---|---|---|
-| 1 | tamaño / antigüedad del lote | `PIPELINE_BATCH_ROWS` · `_BYTES` · `_AGE_MS` | rendimiento ↔ frescura |
+| 1 | tamaño / antigüedad del lote | `PIPELINE_BATCH_ROWS` (50 000) · `PIPELINE_BATCH_BYTES` (32 MiB) · `PIPELINE_BATCH_AGE_MS` (2 000) | rendimiento ↔ frescura |
 | 2 | K writers | `PIPELINE_WRITERS` (2) | subir solo si domina la latencia de INSERT |
-| 3 | capacidad del canal de entrada | `PipelineConfig::channel_capacity` | lo justo para que no esperen los writers |
-| 4 | *MaxAckPending* | `NATS_MAX_ACK_PENDING` | ≥ pods × filas_lote × (K + 1) |
+| 3 | capacidad del canal de entrada | `PipelineConfig::channel_capacity` (10 000, solo en código) | lo justo para que no esperen los writers |
+| 4 | *MaxAckPending* | `NATS_MAX_ACK_PENDING` | ≥ pods × filas_lote × (K + 3) |
 
 Entre pods: todos comparten el **mismo consumidor durable**. Escalar fuera = añadir réplicas
-([despliegue](../operations/deployment-and-scaling.md)).
+([despliegue](../operaciones/despliegue-y-escalado.md)).

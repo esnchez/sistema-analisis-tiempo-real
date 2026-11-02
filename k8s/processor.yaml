@@ -5,7 +5,7 @@
 #   depende de NATS ni de ClickHouse: su caída no debe reiniciar los pods en cascada.
 # - Sin readiness: ningún Service le envía tráfico, así que no decidiría nada. El progreso se
 #   vigila con el lag del consumidor (alertas en `alerts.yaml`).
-# Diseño en docs/operations/deployment-and-scaling.md.
+# Diseño en docs/operaciones/despliegue-y-escalado.md.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -77,7 +77,7 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 10
             failureThreshold: 3
-          # requests = limits: QoS Guaranteed (docs/processing/memory.md).
+          # requests = limits: QoS Guaranteed (docs/servicio/memoria.md).
           resources:
             requests:
               cpu: 500m

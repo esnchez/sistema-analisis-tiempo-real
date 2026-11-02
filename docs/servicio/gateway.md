@@ -17,10 +17,13 @@ cliente ──POST /v1/events──▶ gateway ──publish (espera confirmaci�
 | Petición | Respuesta | Significado |
 |---|---|---|
 | `POST /v1/events` con un array JSON (o un único valor) | `202 {"accepted": n}` | publicados y guardados de forma durable |
+| `POST /v1/events` con `[]` | `202 {"accepted": 0}` | nada que publicar |
 | cuerpo que no es JSON | `400` | nada publicado |
 | más de 500 eventos o cuerpo > 1 MiB | `413` | nada publicado |
 | JetStream no confirma | `503` + `Retry-After: 1` | **reintentar el lote completo** |
 | `GET /health` | `200` | el proceso está vivo |
+
+Los errores llevan el cuerpo `{"error": "<mensaje>"}`.
 
 ## Tolerante a propósito
 
@@ -31,8 +34,8 @@ cliente ──POST /v1/events──▶ gateway ──publish (espera confirmaci�
 
 | Lo que sí hace | Para qué |
 |---|---|
-| leer `event_id` si existe y es texto | `Nats-Msg-Id`: JetStream descarta reintentos del cliente |
-| leer `source` + `event.type` si existen | subject `events.<source>.<type>`; si no, `events.unknown` |
+| leer `event_id` si es texto no vacío, de ≤ 128 caracteres y sin caracteres de control | `Nats-Msg-Id`: JetStream descarta reintentos del cliente |
+| leer `source` + `event.type` si ambos cumplen `[a-z0-9_]{1,64}` | subject `events.<source>.<type>`; si no, `events.unknown` |
 | conservar el JSON byte a byte | el procesador y la DLQ reciben exactamente lo enviado |
 | limitar tamaño y número de eventos | proteger memoria y respetar el `max_payload` de NATS |
 
@@ -48,7 +51,12 @@ guardados se descartan por `Nats-Msg-Id` dentro de la `duplicate_window` (2 min)
 | `GATEWAY_ADDR` | `0.0.0.0:8080` |
 | `GATEWAY_MAX_BODY_BYTES` | `1048576` |
 | `GATEWAY_MAX_EVENTS` | `500` |
-| `NATS_URL` y resto de `NATS_*` | ver [topología](../processing/nats-topology.md) |
+| `NATS_URL` y resto de `NATS_*` | ver [topología](topologia-nats.md) |
+
+## Parada
+
+Al recibir SIGTERM deja de aceptar conexiones y termina las peticiones en curso
+([despliegue](../operaciones/despliegue-y-escalado.md)).
 
 ## ¿Por qué un servicio aparte del procesador?
 

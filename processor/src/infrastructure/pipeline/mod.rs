@@ -14,7 +14,7 @@
 //! - `shutdown`: deja de pedir, cierra el lote abierto, espera las escrituras y termina.
 //!
 //! No depende del broker: recibe un `Stream` de [`Delivery`]. El adaptador de NATS está en
-//! [`crate::infrastructure::nats`]. Diseño en `docs/processing/concurrency.md`.
+//! [`crate::infrastructure::nats`]. Diseño en `docs/servicio/concurrencia.md`.
 
 mod batcher;
 mod breaker;

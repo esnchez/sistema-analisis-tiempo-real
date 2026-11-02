@@ -12,14 +12,14 @@ clientes ──HTTP──▶ event-gateway ──▶ NATS JetStream ──▶ da
 
 | Servicio | Binario | Responsabilidad | Detalle |
 |---|---|---|---|
-| gateway | `event-gateway` | aceptar eventos de clientes y publicarlos | [gateway](../ingestion/gateway.md) |
-| NATS | — | desacoplar entrada y procesamiento; retener el backlog | [topología](../processing/nats-topology.md) |
-| procesador | `data-processor` | validar, agrupar en lotes y persistir; apartar lo inválido | [concurrencia](../processing/concurrency.md) |
-| ClickHouse | — | almacenamiento y consultas OLAP | [tabla](../storage/clickhouse-table.md) |
+| gateway | `event-gateway` | aceptar eventos de clientes y publicarlos | [gateway](gateway.md) |
+| NATS | — | desacoplar entrada y procesamiento; retener el backlog | [topología](topologia-nats.md) |
+| procesador | `data-processor` | validar, agrupar en lotes y persistir; apartar lo inválido | [concurrencia](concurrencia.md) |
+| ClickHouse | — | almacenamiento y consultas OLAP | [tabla](tabla-events.md) |
 
 > [!NOTE]
 > Gateway y procesador comparten crate e imagen, pero se despliegan por separado: escalan con
-> cosas distintas ([despliegue](../operations/deployment-and-scaling.md)). Dentro del procesador,
+> cosas distintas ([despliegue](../operaciones/despliegue-y-escalado.md)). Dentro del procesador,
 > las etapas son tareas de un mismo proceso, no microservicios.
 
 ## Capas (hexagonal)
@@ -43,8 +43,8 @@ infrastructure ──▶ application ──▶ domain
 ## Estructura
 
 ```
-real-time-analysis-system/
-├── docker-compose.yml          NATS · ClickHouse · processor · gateway (+ perfil loadtest)
+sistema-analisis-tiempo-real/
+├── docker-compose.yml          NATS · ClickHouse · processor · gateway (+ perfiles loadtest y k6)
 ├── docs/                       esta documentación
 ├── k8s/                        manifiestos del sistema (Kubernetes)
 │   └── monitoring/             Grafana, Prometheus, alertas y valores de kube-prometheus-stack

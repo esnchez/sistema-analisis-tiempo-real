@@ -4,7 +4,7 @@
   Por defecto ClickHouse escribe varias veces por segundo en sus propias tablas de sistema
   (`asynchronous_metric_log`, `trace_log`, `text_log`…). En un nodo pequeño eso consumía
   ~0,8 núcleos sin carga y dejaba sin CPU a NATS, que confirma las publicaciones del gateway
-  (docs/operations/kubernetes.md, "Hallazgos"). Sus métricas ya llegan a Prometheus por el
+  (docs/operaciones/kubernetes.md, "Hallazgos"). Sus métricas ya llegan a Prometheus por el
   endpoint :9363, así que estas tablas sobran aquí.
 
   Se conservan `query_log`, `part_log` y `error_log`: pequeñas y útiles para diagnosticar

@@ -1,4 +1,4 @@
-# Alertas del pipeline (docs/operations/observability.md). Se despliegan con `k8s/` (incluye este directorio). Las evalúa el Prometheus del
+# Alertas del pipeline (docs/operaciones/observabilidad.md). Se despliegan con `k8s/` (incluye este directorio). Las evalúa el Prometheus del
 # kube-prometheus-stack; sin Alertmanager en pruebas, se ven en Prometheus (/alerts) y Grafana.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -25,14 +25,15 @@ spec:
 
         - alert: RtasAckPendingNearLimit
           expr: |
-            sum(jetstream_consumer_num_ack_pending{consumer_name="processor"}) > 0.8 * 500000
+            sum(jetstream_consumer_num_ack_pending{consumer_name="processor"})
+              > 0.8 * max(processor_nats_max_ack_pending)
           for: 5m
           labels:
             severity: warning
           annotations:
             summary: Mensajes sin ack cerca de MaxAckPending
             description: >-
-              Al alcanzar NATS_MAX_ACK_PENDING (500 000) los pods dejan de recibir mensajes.
+              Al alcanzar NATS_MAX_ACK_PENDING (lo publica el procesador como processor_nats_max_ack_pending) los pods dejan de recibir mensajes.
 
         - alert: RtasCircuitBreakerOpen
           expr: max(processor_breaker_open) == 1
@@ -137,7 +138,7 @@ spec:
             severity: warning
           annotations:
             summary: "{{ $labels.pod }} usa más del 80 % de su límite de memoria"
-            description: Riesgo de OOMKill. Revisar tamaño de lote y K (docs/processing/memory.md).
+            description: Riesgo de OOMKill. Revisar tamaño de lote y K (docs/servicio/memoria.md).
 
         - alert: RtasClickHouseTooManyParts
           expr: max(ClickHouseAsyncMetrics_MaxPartCountForPartition) > 300

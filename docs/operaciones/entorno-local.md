@@ -13,13 +13,25 @@ Para desarrollo rápido. El entorno de pruebas con monitorización completa es
 | `gateway` | `rtas-processor:dev` (`event-gateway`) | 8080 | — |
 | `prometheus` | `prom/prometheus:v3.15.0` | 9090 | `loadtest` |
 | `grafana` | `grafana/grafana:13.2.3` | 3000 (sin login) | `loadtest` |
-| `k6` | `grafana/k6:2.3.0` | — | `loadtest` (se ejecuta con `run`) |
+| `k6` | `grafana/k6:2.3.0` | — | `k6` (`docker compose --profile loadtest run --rm k6` lo activa al ejecutarlo) |
 
 ## Comandos
 
+Con [Task](https://taskfile.dev) (`Taskfile.yml` en la raíz):
+
+| Tarea | Hace |
+|---|---|
+| `task env:up` | pipeline completo (`docker compose up -d --build --wait`) |
+| `task env:monitoring` | + Prometheus y Grafana |
+| `task env:reset` | borra volúmenes y vuelve a arrancar (recrea esquema y streams) |
+| `task env:logs` | logs del procesador y el gateway |
+| `task env:down` | para todo y borra los volúmenes |
+
+Equivalentes sin Task:
+
 ```bash
 docker compose up -d --build                         # pipeline completo
-docker compose --profile loadtest up -d --build      # + Prometheus y Grafana (config en k8s/monitoring/)
+docker compose --profile loadtest up -d --build      # + Prometheus y Grafana (config en loadtest/compose/)
 docker compose down -v && docker compose up -d       # recrear esquema y volúmenes
 docker compose logs -f processor gateway             # logs
 
@@ -33,20 +45,16 @@ docker compose exec clickhouse clickhouse-client --password clickhouse -q 'SELEC
 
 ## Pruebas
 
-```bash
-cd processor
-cargo test                                                           # unitarias (sin servicios)
-CLICKHOUSE_PASSWORD=clickhouse cargo test --test integration -- --ignored   # requiere nats + clickhouse
-```
+Unitarias, integración y carga con k6, con sus resultados: [pruebas](pruebas.md).
 
 ## Variables de entorno
 
 | Prefijo | Servicio | Documentación |
 |---|---|---|
-| `NATS_*` | gateway, procesador | [topología](../processing/nats-topology.md) |
-| `CLICKHOUSE_*` | procesador | `infrastructure/clickhouse/config.rs` |
-| `PIPELINE_*` | procesador | [concurrencia](../processing/concurrency.md) |
-| `GATEWAY_*` | gateway | [gateway](../ingestion/gateway.md) |
+| `NATS_*` | gateway, procesador | [topología](../servicio/topologia-nats.md) |
+| `CLICKHOUSE_*` | procesador | [tabla `events`](../servicio/tabla-events.md) |
+| `PIPELINE_*` | procesador | [concurrencia](../servicio/concurrencia.md) |
+| `GATEWAY_*` | gateway | [gateway](../servicio/gateway.md) |
 | `RUST_LOG` | ambos | filtro de `tracing` (`info`, `debug`…) |
-| `OTEL_*` | ambos | exportación de métricas por OTLP; sin `OTEL_EXPORTER_OTLP_ENDPOINT` no se exportan ([observabilidad](observability.md)) |
+| `OTEL_*` | ambos | exportación de métricas por OTLP; sin endpoint no se exportan, y en Compose no se definen ([observabilidad](observabilidad.md)) |
 | `HEARTBEAT_FILE` | procesador | archivo del latido para la liveness probe ([Kubernetes](kubernetes.md)) |

@@ -34,6 +34,15 @@ async fn main() -> Result<(), BoxError> {
         );
     }
 
+    // El exporter de NATS no publica el MaxAckPending del consumidor: lo publica el procesador
+    // para que la alerta `RtasAckPendingNearLimit` siga a `NATS_MAX_ACK_PENDING`.
+    let max_ack_pending = nats_config.max_ack_pending;
+    let _max_ack_pending = opentelemetry::global::meter("data-processor")
+        .i64_observable_gauge("processor.nats.max_ack_pending")
+        .with_description("MaxAckPending configurado en el consumidor")
+        .with_callback(move |observer| observer.observe(max_ack_pending, &[]))
+        .build();
+
     let js = nats::connect(&nats_config).await?;
     nats::ensure_streams(&js, &nats_config).await?;
     let consumer = nats::ensure_consumer(&js, &nats_config).await?;

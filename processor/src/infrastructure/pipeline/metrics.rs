@@ -5,7 +5,7 @@
 //! crearlas **después** de iniciar la telemetría, al arrancar [`super::run`].
 //!
 //! Nombres con puntos (convención OTel); en Prometheus aparecen con `_` y el sufijo de
-//! unidad (`processor_insert_duration_seconds`). Catálogo en `docs/operations/observability.md`.
+//! unidad (`processor_insert_duration_seconds`). Catálogo en `docs/operaciones/observabilidad.md`.
 
 use std::sync::Arc;
 
@@ -31,6 +31,15 @@ pub(super) struct PipelineMetrics {
     busy_writers: UpDownCounter<i64>,
     /// Se lee en cada exportación; hay que mantenerlo vivo mientras corre el pipeline.
     _breaker_open: ObservableGauge<u64>,
+}
+
+/// Lote en escritura; al soltarse descuenta `processor.writers.busy`.
+pub(super) struct BatchInProgress<'a>(&'a PipelineMetrics);
+
+impl Drop for BatchInProgress<'_> {
+    fn drop(&mut self) {
+        self.0.busy_writers.add(-1, &[]);
+    }
 }
 
 /// Resultado de un intento de `INSERT`.
@@ -122,14 +131,14 @@ impl PipelineMetrics {
         self.dead_letters.add(1, &[KeyValue::new("reason", reason)]);
     }
 
-    pub fn batch_started(&self, rows: usize, bytes: usize) {
+    /// Marca un lote como en escritura hasta que se suelte el valor devuelto. Al ser un
+    /// guard, `processor.writers.busy` baja también si la tarea entra en pánico.
+    #[must_use = "el lote cuenta como en escritura hasta que se suelta el guard"]
+    pub fn batch_started(&self, rows: usize, bytes: usize) -> BatchInProgress<'_> {
         self.busy_writers.add(1, &[]);
         self.batch_rows.record(rows as u64, &[]);
         self.batch_bytes.record(bytes as u64, &[]);
-    }
-
-    pub fn batch_finished(&self) {
-        self.busy_writers.add(-1, &[]);
+        BatchInProgress(self)
     }
 
     pub fn batch_abandoned(&self) {

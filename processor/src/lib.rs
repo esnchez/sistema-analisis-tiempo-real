@@ -4,7 +4,7 @@
 //!
 //! - [`domain`]: tipos y reglas del negocio. Sin I/O.
 //! - [`application`]: casos de uso y puertos (traits) que necesitan del exterior.
-//! - [`infrastructure`]: adaptadores que implementan los puertos (NATS, ClickHouse, Temporal).
+//! - [`infrastructure`]: adaptadores que implementan los puertos (NATS, ClickHouse, HTTP).
 //!
 //! `main.rs` es la raíz de composición: construye los adaptadores y los inyecta en los casos de uso.
 
