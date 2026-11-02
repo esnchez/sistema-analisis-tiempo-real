@@ -1,0 +1,99 @@
+# data-processor: NATS → ClickHouse. Sin puertos: no sirve nada, solo consume.
+#
+# - Métricas: las empuja por OTLP al colector (`OTEL_EXPORTER_OTLP_ENDPOINT`).
+# - Liveness: probe `exec` sobre el latido de `HEARTBEAT_FILE` (proceso y runtime vivos). No
+#   depende de NATS ni de ClickHouse: su caída no debe reiniciar los pods en cascada.
+# - Sin readiness: ningún Service le envía tráfico, así que no decidiría nada. El progreso se
+#   vigila con el lag del consumidor (alertas en `alerts.yaml`).
+# Diseño en docs/operations/deployment-and-scaling.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processor
+  labels:
+    app.kubernetes.io/name: processor
+spec:
+  # Réplicas sobre el mismo consumidor durable: JetStream reparte los mensajes.
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: processor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: processor
+    spec:
+      automountServiceAccountToken: false
+      # > antigüedad máx. de lote + timeout de INSERT + margen: la parada ordenada termina
+      # los lotes en curso antes del SIGKILL.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534 # `nobody` en la imagen
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: processor
+          image: rtas-processor:dev
+          imagePullPolicy: IfNotPresent
+          command: ["data-processor"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NATS_URL
+              value: nats://nats:4222
+            - name: CLICKHOUSE_URL
+              value: http://clickhouse:8123
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clickhouse
+                  key: password
+            - name: RUST_LOG
+              value: info
+            - name: HEARTBEAT_FILE
+              value: /tmp/heartbeat
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector:4317
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: "10000"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.instance.id=$(POD_NAME),k8s.pod.name=$(POD_NAME)
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - test $(( $(date +%s) - $(cat /tmp/heartbeat 2>/dev/null || echo 0) )) -lt 30
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          # requests = limits: QoS Guaranteed (docs/processing/memory.md).
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Mi

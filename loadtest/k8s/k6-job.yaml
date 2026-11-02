@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6
+  labels:
+    app.kubernetes.io/name: k6
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: k6
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: k6
+          image: grafana/k6:2.3.0
+          args: ["run", "-o", "experimental-prometheus-rw", "/scripts/k6.js"]
+          env:
+            # Escenario: por defecto el del README (2 000 req/s, 5 min de rampa + 10 de meseta).
+            - name: RATE
+              value: "2000"
+            - name: RAMP
+              value: 5m
+            - name: HOLD
+              value: 10m
+            - name: BATCH
+              value: "10"
+            - name: GATEWAY_URL
+              value: http://gateway:8080
+            - name: CLICKHOUSE_URL
+              value: http://clickhouse:8123
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clickhouse
+                  key: password
+            - name: NATS_MONITOR_URL
+              value: http://nats:8222
+            - name: K6_PROMETHEUS_RW_SERVER_URL
+              value: http://kube-prometheus-stack-prometheus.monitoring:9090/api/v1/write
+            - name: K6_PROMETHEUS_RW_TREND_STATS
+              value: p(50),p(95),p(99),max
+          # Con 2 000 req/s k6 llegó a ~1 150 VUs y al 87 % de 1 GiB: margen hasta 2 GiB.
+          resources:
+            requests:
+              cpu: "1"
+              memory: 256Mi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: k6-script

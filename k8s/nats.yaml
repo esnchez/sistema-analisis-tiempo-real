@@ -1,0 +1,115 @@
+# NATS con JetStream (1 nodo: entorno de pruebas). Los streams y el consumidor los crean el
+# gateway y el procesador al arrancar (`ensure_streams` / `ensure_consumer`).
+#
+# Sidecar `prometheus-nats-exporter`: traduce la monitorización HTTP de NATS (/jsz, /varz) a
+# métricas de Prometheus (lag del consumidor, acks pendientes, reentregas, tamaño de streams).
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  labels:
+    app.kubernetes.io/name: nats
+spec:
+  selector:
+    app.kubernetes.io/name: nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+    - name: monitor
+      port: 8222
+      targetPort: monitor
+    - name: metrics
+      port: 7777
+      targetPort: metrics
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  labels:
+    app.kubernetes.io/name: nats
+spec:
+  serviceName: nats
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nats
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.14-alpine
+          # JetStream, monitorización y tope de disco en config/nats.conf.
+          args: ["-c", "/etc/nats/nats.conf"]
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz?js-enabled-only=true
+              port: monitor
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            periodSeconds: 10
+            failureThreshold: 6
+          # Petición de CPU realista: confirma cada publicación del gateway. Con 100m quedaba
+          # sin CPU cuando el nodo se saturaba (latencia del gateway de cientos de ms).
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/nats
+              readOnly: true
+        - name: exporter
+          image: natsio/prometheus-nats-exporter:0.20.3
+          args: ["-port", "7777", "-varz", "-jsz=all", "http://localhost:8222"]
+          ports:
+            - name: metrics
+              containerPort: 7777
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+      volumes:
+        - name: config
+          configMap:
+            name: nats-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nats
+  labels:
+    app.kubernetes.io/name: nats
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+  endpoints:
+    - port: metrics
+      interval: 5s

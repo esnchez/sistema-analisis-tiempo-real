@@ -1,0 +1,22 @@
+# Monitorización del sistema para el kube-prometheus-stack: alertas (PrometheusRule) y
+# dashboards de Grafana. La incluye `k8s/kustomization.yaml`; no se aplica sola.
+#
+# El stack (Prometheus + Grafana) se instala aparte con Helm y
+# `kube-prometheus-stack-values.yaml` (ver docs/operations/kubernetes.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - alerts.yaml
+
+configMapGenerator:
+  # El sidecar de Grafana carga los ConfigMaps con `grafana_dashboard: "1"` de cualquier
+  # namespace. Sin sufijo hash: un nombre nuevo en cada cambio duplicaría los dashboards.
+  - name: grafana-dashboards-rtas
+    files:
+      - rtas-pipeline.json=grafana/dashboards/pipeline.json
+      - rtas-loadtest.json=grafana/dashboards/loadtest.json
+    options:
+      disableNameSuffixHash: true
+      labels:
+        grafana_dashboard: "1"

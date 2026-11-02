@@ -1,0 +1,151 @@
+# Alertas del pipeline (docs/operations/observability.md). Se despliegan con `k8s/` (incluye este directorio). Las evalúa el Prometheus del
+# kube-prometheus-stack; sin Alertmanager en pruebas, se ven en Prometheus (/alerts) y Grafana.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: rtas
+  labels:
+    app.kubernetes.io/name: rtas-alerts
+spec:
+  groups:
+    - name: rtas.pipeline
+      rules:
+        - alert: RtasConsumerLagGrowing
+          expr: |
+            sum(jetstream_consumer_num_pending{consumer_name="processor"}) > 10000
+            and sum(deriv(jetstream_consumer_num_pending{consumer_name="processor"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: El lag del consumidor `processor` crece de forma sostenida
+            description: >-
+              {{ $value }} mensajes pendientes en EVENTS. La flota no da abasto o ClickHouse
+              falla: revisar el circuit breaker y la duración de INSERT, o añadir réplicas.
+
+        - alert: RtasAckPendingNearLimit
+          expr: |
+            sum(jetstream_consumer_num_ack_pending{consumer_name="processor"}) > 0.8 * 500000
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Mensajes sin ack cerca de MaxAckPending
+            description: >-
+              Al alcanzar NATS_MAX_ACK_PENDING (500 000) los pods dejan de recibir mensajes.
+
+        - alert: RtasCircuitBreakerOpen
+          expr: max(processor_breaker_open) == 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: Circuit breaker abierto en el procesador
+            description: >-
+              ClickHouse falla de forma transitoria y el procesador ha dejado de consumir. El
+              backlog espera en JetStream.
+
+        - alert: RtasDeadLetterRateHigh
+          expr: |
+            sum(rate(processor_dead_letters_total[5m]))
+              / (sum(rate(processor_events_received_total[5m])) + sum(rate(processor_dead_letters_total[5m])))
+              > 0.001
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Más del 0,1 % de los eventos acaba en la DLQ
+            description: >-
+              Revisar el motivo (`reason`) en el dashboard: clientes desactualizados
+              (invalid_event), relojes desfasados (out_of_time_window) o esquema (rejected_by_store).
+
+        - alert: RtasFreshnessHigh
+          expr: |
+            histogram_quantile(0.99, sum by (le) (rate(processor_event_freshness_seconds_bucket[5m]))) > 10
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Frescura p99 por encima de 10 s
+            description: Los eventos tardan más de lo esperado en ser consultables en ClickHouse.
+
+        - alert: RtasInsertLatencyHigh
+          expr: |
+            histogram_quantile(0.99, sum by (le) (rate(processor_insert_duration_seconds_bucket{outcome="ok"}[5m]))) > 5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: INSERT p99 por encima de 5 s
+            description: ClickHouse está saturado; los lotes retienen sus mensajes más tiempo.
+
+        - alert: RtasProcessorMetricsMissing
+          expr: absent(processor_breaker_open)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Ningún procesador envía métricas
+            description: >-
+              Los pods del procesador no están corriendo o no llegan al colector OpenTelemetry.
+
+    - name: rtas.gateway
+      rules:
+        - alert: RtasGatewayErrorRateHigh
+          expr: |
+            sum(rate(http_server_request_duration_seconds_count{job="event-gateway",http_route="/v1/events",http_response_status_code=~"5.."}[5m]))
+              / sum(rate(http_server_request_duration_seconds_count{job="event-gateway",http_route="/v1/events"}[5m]))
+              > 0.001
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Más del 0,1 % de errores 5xx en el gateway
+            description: JetStream no confirma las publicaciones (NATS caído o sin espacio).
+
+        - alert: RtasGatewayLatencyHigh
+          expr: |
+            histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{job="event-gateway",http_route="/v1/events"}[5m]))) > 0.2
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Latencia p99 del gateway por encima de 200 ms
+            description: Objetivo del README incumplido.
+
+    - name: rtas.storage
+      rules:
+        - alert: RtasJetStreamStorageHigh
+          expr: |
+            sum(jetstream_stream_total_bytes) / max(jetstream_server_max_storage) > 0.7
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: JetStream usa más del 70 % de su disco
+            description: >-
+              Al llenarse, `retention=limits` descarta los mensajes más antiguos: se perderían
+              eventos aún no procesados. Ampliar `max_file_store` y el PVC, o revisar el lag.
+
+        - alert: RtasPodMemoryNearLimit
+          expr: |
+            max by (pod, container) (container_memory_working_set_bytes{namespace="rtas",container!=""})
+              / max by (pod, container) (kube_pod_container_resource_limits{namespace="rtas",resource="memory"})
+              > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.pod }} usa más del 80 % de su límite de memoria"
+            description: Riesgo de OOMKill. Revisar tamaño de lote y K (docs/processing/memory.md).
+
+        - alert: RtasClickHouseTooManyParts
+          expr: max(ClickHouseAsyncMetrics_MaxPartCountForPartition) > 300
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Demasiadas partes en una partición de ClickHouse
+            description: >-
+              Con ~3 000 ClickHouse rechaza las inserciones (TOO_MANY_PARTS). Subir el tamaño de
+              lote o bajar el ritmo de INSERT de la flota.

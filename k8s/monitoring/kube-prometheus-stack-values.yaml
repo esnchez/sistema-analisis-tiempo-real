@@ -1,0 +1,61 @@
+# Valores del chart prometheus-community/kube-prometheus-stack para el clúster de pruebas.
+#
+#   helm --kube-context rtas upgrade --install kube-prometheus-stack \
+#     prometheus-community/kube-prometheus-stack -n monitoring --create-namespace \
+#     -f k8s/monitoring/kube-prometheus-stack-values.yaml --version 92.10.1
+#
+# - Prometheus descubre ServiceMonitors, PodMonitors y PrometheusRules de todos los
+#   namespaces, sin exigir etiquetas del release.
+# - Recibe remote write: k6 empuja sus métricas durante las pruebas de carga.
+# - Grafana carga los dashboards de ConfigMaps con `grafana_dashboard: "1"` de cualquier
+#   namespace.
+alertmanager:
+  enabled: false # las alertas se ven en Prometheus/Grafana; sin notificaciones en pruebas
+
+grafana:
+  adminPassword: admin
+  defaultDashboardsTimezone: browser
+  env:
+    GOMEMLIMIT: 450MiB
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+
+prometheus:
+  prometheusSpec:
+    enableRemoteWriteReceiver: true
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    retention: 2d
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        memory: 1536Mi
+
+# Componentes del plano de control que minikube no expone.
+kubeControllerManager:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeScheduler:
+  enabled: false
+
+prometheus-node-exporter:
+  hostRootFsMount:
+    enabled: false # no funciona con el driver docker de minikube

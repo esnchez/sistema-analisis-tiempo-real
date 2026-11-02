@@ -1,0 +1,128 @@
+services:
+  nats:
+    # 2.14: última versión con soporte explícito en async-nats 0.50. Alpine trae `wget`.
+    image: nats:2.14-alpine
+    # -js: JetStream (persistencia, consumidores durables) · -m: monitorización HTTP.
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "4222:4222" # clientes
+      - "8222:8222" # monitorización: /healthz, /jsz
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz?js-enabled-only=true"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  clickhouse:
+    # Imagen oficial (la de `yandex/` está obsoleta). Fijada a la versión LTS para que el
+    # entorno local sea reproducible.
+    image: clickhouse/clickhouse-server:26.8
+    ports:
+      - "8123:8123" # HTTP: lo usa el procesador en Rust
+      - "9000:9000" # protocolo nativo: clickhouse-client
+    environment:
+      # Sin contraseña la imagen bloquea el acceso por red del usuario `default`.
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+    volumes:
+      # Crea el esquema al arrancar con el volumen vacío. Tras cambiarlo:
+      # `docker compose down -v && docker compose up -d`.
+      - ./processor/config/clickhouse.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      # Sin las tablas de log internas que más CPU consumen (ver el propio archivo).
+      - ./k8s/config/clickhouse-system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── Servicios propios (una imagen, dos binarios) ──────────────────────────
+  processor:
+    build: ./processor
+    image: rtas-processor:dev
+    command: ["data-processor"]
+    environment:
+      NATS_URL: nats://nats:4222
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: clickhouse
+      RUST_LOG: info
+    depends_on:
+      nats:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+    # Tiempo para la parada ordenada (cerrar lote, esperar INSERT, ack) antes de SIGKILL.
+    stop_grace_period: 60s
+
+  gateway:
+    image: rtas-processor:dev
+    command: ["event-gateway"]
+    environment:
+      NATS_URL: nats://nats:4222
+      RUST_LOG: info
+    ports:
+      - "8080:8080" # POST /v1/events · GET /health
+    depends_on:
+      nats:
+        condition: service_healthy
+      processor:
+        condition: service_started # comparte imagen: la construye `processor`
+    restart: unless-stopped
+
+  # ── Pruebas de carga (perfil `loadtest`) ──────────────────────────────────
+  prometheus:
+    profiles: ["loadtest"]
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver # k6 empuja sus métricas aquí
+    volumes:
+      - ./k8s/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    profiles: ["loadtest"]
+    image: grafana/grafana:13.2.3
+    environment:
+      # Solo para local: ver sin login (anónimo = solo lectura). Para editar: admin/admin.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./k8s/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./k8s/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  # Perfil propio: `up --profile loadtest` no lo arranca. Se lanza con
+  # `docker compose --profile loadtest run --rm k6` (necesita Prometheus del perfil loadtest).
+  k6:
+    profiles: ["k6"]
+    image: grafana/k6:2.3.0
+    command: ["run", "-o", "experimental-prometheus-rw", "/scripts/k6.js"]
+    environment:
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_STATS: "p(50),p(95),p(99),max"
+      GATEWAY_URL: http://gateway:8080
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: clickhouse
+      NATS_MONITOR_URL: http://nats:8222
+    volumes:
+      - ./loadtest:/scripts:ro
+    depends_on:
+      - gateway
+      - prometheus
+
+volumes:
+  nats-data:
+  clickhouse-data:

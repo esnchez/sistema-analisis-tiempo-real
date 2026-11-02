@@ -1,0 +1,17 @@
+# Compilación de Rust (Cargo.lock sí se versiona: el crate tiene binarios)
+target/
+
+# Editores y sistema operativo
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Variables locales y secretos
+.env
+.env.*
+
+# Salidas de pruebas de carga y logs locales
+*.log
+loadtest/results/

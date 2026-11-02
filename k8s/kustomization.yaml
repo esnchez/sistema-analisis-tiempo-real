@@ -1,0 +1,50 @@
+# Sistema completo en el namespace `rtas`: NATS, ClickHouse, gateway, procesador y colector
+# OpenTelemetry, con sus ServiceMonitors. Incluye `monitoring/` (alertas y dashboards).
+#
+# Lee archivos de fuera de este directorio (el esquema SQL de processor/), así que se aplica con
+# el restrictor de carga desactivado:
+#
+#   kubectl kustomize --load-restrictor LoadRestrictionsNone k8s \
+#     | kubectl --context rtas apply --server-side -f -
+#
+# Guía: docs/operations/kubernetes.md
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rtas
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: rtas
+
+resources:
+  - namespace.yaml
+  - nats.yaml
+  - clickhouse.yaml
+  - otel-collector.yaml
+  - processor.yaml
+  - gateway.yaml
+  - monitoring
+
+configMapGenerator:
+  - name: nats-config
+    files:
+      - nats.conf=config/nats.conf
+  - name: clickhouse-schema
+    files:
+      - 01-schema.sql=../processor/config/clickhouse.sql
+  - name: clickhouse-config
+    files:
+      - prometheus.xml=config/clickhouse-prometheus.xml
+      - system-logs.xml=config/clickhouse-system-logs.xml
+  - name: otel-collector-config
+    files:
+      - config.yaml=config/otel-collector.yaml
+
+secretGenerator:
+  # Solo para el entorno de pruebas.
+  - name: clickhouse
+    literals:
+      - password=clickhouse
+    options:
+      # Nombre fijo: también lo usa el Job de k6 (loadtest/k8s), otra kustomization.
+      disableNameSuffixHash: true

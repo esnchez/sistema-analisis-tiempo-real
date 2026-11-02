@@ -1,0 +1,3 @@
+# Fija la versión de Rust para desarrollo local; debe coincidir con la imagen del Dockerfile.
+[toolchain]
+channel = "1.99"

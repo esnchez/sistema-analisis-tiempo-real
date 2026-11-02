@@ -1,0 +1,27 @@
+# Prueba de carga dentro del clúster: un Job de k6 contra el Service `gateway`.
+# Sus métricas van por remote write al Prometheus del kube-prometheus-stack.
+#
+#   kubectl --context rtas -n rtas delete job k6 --ignore-not-found
+#   kubectl kustomize --load-restrictor LoadRestrictionsNone loadtest/k8s \
+#     | kubectl --context rtas apply --server-side -f -
+#   kubectl --context rtas -n rtas logs -f job/k6
+#
+# Si se cruza un threshold (p. ej. p99 > 200 ms), k6 sale con error y el Job queda `Failed`:
+# el resultado está en los logs (thresholds y conciliación).
+#
+# Parámetros (RATE, RAMP, HOLD, BATCH…) en k6-job.yaml; ver docs/operations/load-testing.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rtas
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: rtas
+
+resources:
+  - k6-job.yaml
+
+configMapGenerator:
+  - name: k6-script
+    files:
+      - k6.js=../k6.js

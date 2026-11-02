@@ -1,0 +1,4 @@
+# Prometheus para las pruebas de carga: recibe las métricas de k6 por remote write
+# (`--web.enable-remote-write-receiver`), no necesita scrapear nada.
+global:
+  scrape_interval: 15s
