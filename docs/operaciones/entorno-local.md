@@ -56,5 +56,5 @@ Unitarias, integración y carga con k6, con sus resultados: [pruebas](pruebas.md
 | `PIPELINE_*` | procesador | [concurrencia](../servicio/concurrencia.md) |
 | `GATEWAY_*` | gateway | [gateway](../servicio/gateway.md) |
 | `RUST_LOG` | ambos | filtro de `tracing` (`info`, `debug`…) |
-| `OTEL_*` | ambos | exportación de métricas por OTLP; sin endpoint no se exportan, y en Compose no se definen ([observabilidad](observabilidad.md)) |
+| `OTEL_*` | ambos | métricas por OTLP; en Compose no se definen ([observabilidad](observabilidad.md)) |
 | `HEARTBEAT_FILE` | procesador | archivo del latido para la liveness probe ([Kubernetes](kubernetes.md)) |

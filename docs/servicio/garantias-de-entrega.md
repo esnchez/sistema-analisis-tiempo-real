@@ -7,7 +7,7 @@ transacciones entre NATS y ClickHouse. Términos en [glosario](../glosario.md).
 
 | Requisito | Valor | Consecuencia |
 |---|---|---|
-| Volumen | ~2 TB/día ≈ 23 MB/s medio | ~23k eventos/s (1 KB/evento) · picos ×3 ≈ 70k/s |
+| Volumen | ~2 TB/día ≈ 23 MB/s medio | ~44k eventos/s con los 524 B medidos por evento · picos ×3 ≈ 130k/s ([extrapolación](../README.md#extrapolación-a-los-objetivos-del-readme)) |
 | Frescura | evento consultable en segundos | lotes cortos en tiempo (1–2 s) |
 | Pérdida de datos | ninguna | *ack* solo tras persistir |
 | Duplicados | invisibles para el análisis | escritura *idempotente* por `event_id` |

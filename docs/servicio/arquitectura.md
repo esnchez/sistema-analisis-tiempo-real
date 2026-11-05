@@ -48,7 +48,7 @@ sistema-analisis-tiempo-real/
 ├── docs/                       esta documentación
 ├── k8s/                        manifiestos del sistema (Kubernetes)
 │   └── monitoring/             Grafana, Prometheus, alertas y valores de kube-prometheus-stack
-├── loadtest/                   k6: script y Job de Kubernetes
+├── loadtest/                   k6: script, Job de Kubernetes, NodePorts para k6 externo y monitorización de Compose
 └── processor/                  crate Rust `data-processor`
     ├── Dockerfile              imagen con los dos binarios
     ├── config/clickhouse.sql   esquema de `events`

@@ -25,10 +25,10 @@ batcher bloqueado en `send`. A eso se suman hasta 10 000 eventos en el canal de 
 
 > [!WARNING]
 > El límite del pod en Kubernetes es **768 Mi** (`k8s/processor.yaml`), por debajo del peor
-> caso teórico con eventos de 1 KB. Los eventos reales de la prueba de carga son mucho más
-> pequeños: en la prueba de carga en Kubernetes el procesador no pasó de **13 MiB**
-> ([pruebas](../operaciones/pruebas.md)), porque los lotes se cortan por antigüedad. Si los eventos
-> crecen, bajar `PIPELINE_BATCH_ROWS` o subir el límite.
+> caso teórico con eventos de 1 KB. En las pruebas de carga los eventos son de 524 B y los lotes
+> se cortan por antigüedad, así que el consumo real queda muy por debajo
+> ([medido por pod](../README.md#coste-medido-por-componente)). Si los eventos crecen, bajar
+> `PIPELINE_BATCH_ROWS` o subir el límite.
 
 > [!NOTE]
 > Amplificación ≈ 3: bytes crudos (retenidos para ack/DLQ) + `SourceEvent` + `EventRow`.

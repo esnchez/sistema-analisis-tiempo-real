@@ -7,9 +7,13 @@
 // Al terminar, `teardown` espera a que el procesador vacíe la cola y `handleSummary`
 // concilia: eventos aceptados por el gateway = eventos en ClickHouse + eventos en la DLQ.
 //
+// Como un cliente real (contrato del gateway), ante un `503` espera `Retry-After` y reenvía el
+// lote completo hasta MAX_503_RETRIES veces. Si aun así no se acepta, sus eventos quedan "sin
+// confirmar": pueden estar guardados en parte, y la conciliación los admite en ambos sentidos.
+//
 // Uso (ver docs/operaciones/pruebas.md):
-//   docker compose --profile loadtest run --rm k6                         # escenario del README
-//   docker compose --profile loadtest run --rm -e RATE=50 -e RAMP=10s -e HOLD=20s k6   # humo
+//   docker compose --profile loadtest run --rm -e BATCH=1 k6              # escenario del README
+//   docker compose --profile loadtest run --rm -e RATE=50 -e RAMP=10s -e HOLD=30s k6   # humo
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
@@ -32,6 +36,7 @@ const MAX_VUS = Number(__ENV.MAX_VUS || 2000); // README: 2.000 usuarios concurr
 const BATCH = Number(__ENV.BATCH || 10); // eventos por petición (SDK que agrupa)
 const INVALID_RATE = Number(__ENV.INVALID_RATE || 0.01); // eventos erróneos u obsoletos
 const RETRY_RATE = Number(__ENV.RETRY_RATE || 0.02); // peticiones que el cliente repite
+const MAX_503_RETRIES = Number(__ENV.MAX_503_RETRIES || 3); // reintentos ante `503` (contrato)
 
 // ── Opciones ───────────────────────────────────────────────────────────────
 export const options = {
@@ -68,6 +73,9 @@ export const options = {
 const sentValid = new Counter('events_sent_valid');
 const sentInvalid = new Counter('events_sent_invalid');
 const clientRetries = new Counter('client_retries');
+const serverRetries = new Counter('retries_after_503');
+const unconfirmedValid = new Counter('events_unconfirmed_valid');
+const unconfirmedInvalid = new Counter('events_unconfirmed_invalid');
 const natsPending = new Gauge('pipeline_nats_pending');
 const natsAckPending = new Gauge('pipeline_nats_ack_pending');
 const natsRedelivered = new Gauge('pipeline_nats_redelivered');
@@ -101,10 +109,20 @@ export function publish(data) {
   const body = JSON.stringify(events);
   const params = { headers: { 'Content-Type': 'application/json' }, tags: { name: 'POST /v1/events' } };
 
-  const res = http.post(`${GATEWAY_URL}/v1/events`, body, params);
+  let res = http.post(`${GATEWAY_URL}/v1/events`, body, params);
+  // `503`: JetStream no confirmó a tiempo y parte del lote puede estar guardada. El contrato
+  // pide reenviar el lote completo; lo ya guardado se descarta por `Nats-Msg-Id`.
+  for (let attempt = 1; res.status === 503 && attempt <= MAX_503_RETRIES; attempt++) {
+    serverRetries.add(1);
+    sleep(Number(res.headers['Retry-After']) || 1);
+    res = http.post(`${GATEWAY_URL}/v1/events`, body, params);
+  }
   if (check(res, { 'aceptado (202)': (r) => r.status === 202 })) {
     sentValid.add(valid);
     sentInvalid.add(events.length - valid);
+  } else {
+    unconfirmedValid.add(valid);
+    unconfirmedInvalid.add(events.length - valid);
   }
   // Reintento del cliente (p. ej. tras un timeout): mismo cuerpo, mismos event_id.
   // No debe duplicar nada: JetStream lo descarta por `Nats-Msg-Id`.
@@ -157,13 +175,19 @@ export function handleSummary(data) {
   const expectedDead = metric('events_sent_invalid');
   const stored = storedCount(runId);
   const dead = dlqMessages() - dlqStart;
-  const ok = stored === expectedStored && dead === expectedDead;
+  // Lo no confirmado puede estar guardado o no: nunca debe faltar lo aceptado ni sobrar más
+  // que lo no confirmado (eso serían pérdidas o duplicados).
+  const unValid = metric('events_unconfirmed_valid');
+  const unDead = metric('events_unconfirmed_invalid');
+  const within = (got, expected, slack) => got >= expected && got <= expected + slack;
+  const ok = within(stored, expectedStored, unValid) && within(dead, expectedDead, unDead);
 
   const report = `
   conciliación (runId=${runId}) ............ ${ok ? 'OK' : 'FALLO'}
-    válidos aceptados → en ClickHouse ...... ${expectedStored} → ${stored}
-    erróneos aceptados → en la DLQ ......... ${expectedDead} → ${dead}
+    válidos aceptados → en ClickHouse ...... ${expectedStored} → ${stored}${unValid ? ` (+ hasta ${unValid} sin confirmar)` : ''}
+    erróneos aceptados → en la DLQ ......... ${expectedDead} → ${dead}${unDead ? ` (+ hasta ${unDead} sin confirmar)` : ''}
     reintentos de cliente (sin duplicar) ... ${metric('client_retries')}
+    reintentos tras 503 .................... ${metric('retries_after_503')}
 `;
   return { stdout: textSummary(data, { indent: ' ', enableColors: true }) + report };
 }

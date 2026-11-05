@@ -2,7 +2,9 @@
 #
 #   helm --kube-context rtas upgrade --install kube-prometheus-stack \
 #     prometheus-community/kube-prometheus-stack -n monitoring --create-namespace \
-#     -f k8s/monitoring/kube-prometheus-stack-values.yaml --version 92.10.1
+#     -f k8s/monitoring/kube-prometheus-stack-values.yaml --version 92.10.1 --wait --timeout 15m
+#
+# (o `task monitoring:install`)
 #
 # - Prometheus descubre ServiceMonitors, PodMonitors y PrometheusRules de todos los
 #   namespaces, sin exigir etiquetas del release.

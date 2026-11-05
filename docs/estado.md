@@ -6,7 +6,7 @@ la monitorización y las pruebas con sus resultados en [operaciones/](operacione
 
 ## Objetivos del README
 
-A fecha de 2026-11-03, con las pruebas del 2026-11-02.
+A fecha de 2026-11-05, con las pruebas del 2026-11-02 y 2026-11-05. Réplicas necesarias por objetivo: [extrapolación](README.md#extrapolación-a-los-objetivos-del-readme).
 
 | Objetivo | Estado |
 |---|---|
@@ -14,13 +14,13 @@ A fecha de 2026-11-03, con las pruebas del 2026-11-02.
 | Fase 2: ingesta y almacenamiento en ClickHouse | ✅ [gateway](servicio/gateway.md) HTTP → NATS, tabla ancha `ReplacingMergeTree` |
 | Fase 3: procesador en Rust y flujos con NATS | ✅ JetStream con dedup en 4 capas, DLQ, bisección, circuit breaker ([garantías](servicio/garantias-de-entrega.md)) |
 | Fase 4: desplegar en Kubernetes y medir | 🟡 desplegado y medido en minikube con Prometheus, Grafana y alertas; EKS sin hacer |
-| 2 000 req/s sostenidos | ✅ en Compose (2 000 en meseta) · 🟡 en minikube 1 870: la CPU de 4 núcleos se satura, con k6 dentro ([pruebas](operaciones/pruebas.md)) |
-| p99 < 200 ms | ✅ en Compose (p95 44,5 ms) · ❌ en minikube (p99 299 ms, p95 183 ms) por la CPU compartida |
-| Tasa de error < 0,1 % | ✅ 0 errores en todas las pruebas; conciliación exacta, sin pérdidas ni duplicados |
+| 2 000 req/s sostenidos | ✅ en Compose · 🟡 en minikube, 1 938 req/s con k6 fuera del clúster. Bastan 2 pods de gateway y 2 de procesador ([resultados](README.md#lo-que-demuestran-las-pruebas), [extrapolación](README.md#extrapolación-a-los-objetivos-del-readme)) |
+| p99 < 200 ms | ✅ en Compose el 2026-11-02 · ❌ en minikube (p99 553 ms): falta CPU en el portátil, no capacidad del pipeline; necesita CPU dedicada para confirmarse ([por qué](README.md#por-qué-falla-el-p99-en-local)) |
+| Tasa de error < 0,1 % | ✅ 0 errores en todas las ejecuciones del escenario del README; solo la prueba de eventos con la CPU desbordada dio 0,8 % de `503`. Ninguna pérdida ni duplicado ([resultados](README.md#lo-que-demuestran-las-pruebas)) |
 | Pruebas unitarias y de integración (NATS → ClickHouse) | ✅ 63 unitarias, 5 de integración en Compose y en el clúster |
-| Punto de saturación ~3 500 req/s | ⚪ sin medir: en local satura antes la CPU compartida; necesita k6 fuera del clúster |
-| 2 TB/día (~23 MB/s, ~38 000 eventos/s de ~600 B) | ⚪ no demostrable en local: máximo medido ~6 400 eventos/s en Compose con el procesador a ~0,4 núcleos; requiere escalar en un clúster real |
-| Respuesta analítica de 10 min a 500 ms | ⚪ sin medir: frescura de ~2 s (dato consultable), pero no hay lado de lectura (consultas) ni línea base |
+| Punto de saturación ~3 500 req/s | 🟡 extrapolado, no medido: coherente con un nodo dedicado de 4 vCPU ([extrapolación](README.md#extrapolación-a-los-objetivos-del-readme)) |
+| 2 TB/día (~44 000 eventos/s) | 🟡 extrapolado, no medido: ~16 núcleos y **cambios de configuración** antes de escalar (retención y disco de NATS, `NATS_MAX_ACK_PENDING`, disco de ClickHouse) ([extrapolación](README.md#extrapolación-a-los-objetivos-del-readme)) |
+| Respuesta analítica de 10 min a 500 ms | 🟡 datos consultables a los ~2 s y agregaciones simples por debajo de 500 ms; las de cardinalidad necesitan vistas materializadas. Sin línea base de 10 min ([consultas](README.md#consultas-analíticas-objetivo-de-500-ms)) |
 | Temporal | ⚪ sin implementar: diseñado fuera del camino caliente (RGPD, reproceso de la DLQ, *backfills*; [fallos](servicio/fallos-y-reintentos.md#temporal-fuera-del-camino-caliente)) |
 | Despliegue en EKS con Terraform | ⚪ sin hacer: el README tiene solo un esbozo (EKS 1.21) |
 | Alta disponibilidad y escalado | 🟡 2 réplicas fijas de gateway y procesador, parada ordenada y probes; sin HPA/KEDA ni ClickHouse/NATS replicados |

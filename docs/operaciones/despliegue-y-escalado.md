@@ -14,7 +14,7 @@
 |---|---|
 | Escalado vertical | runtime tokio multihilo, K writers ([concurrencia](../servicio/concurrencia.md)) |
 | Parada ordenada (SIGTERM) | 1) parar fetch · 2) cerrar lote · 3) cada writer inserta y hace ack · 4) esperar a todos · 5) salir. Lo que quedaba en el *prefetch* se reentrega tras *AckWait* |
-| `terminationGracePeriodSeconds` | > antigüedad máx. de lote + timeout de INSERT + margen: 60 s (en compose `stop_grace_period: 60s`) |
+| `terminationGracePeriodSeconds` | > antigüedad máx. de lote (2 s) + `INSERT` con sus reintentos (hasta ~7,5 s de espera) + margen: 60 s (en compose `stop_grace_period: 60s`). El cliente de ClickHouse no fija timeout de `INSERT` |
 | Liveness | probe `exec` sobre un latido en archivo (`HEARTBEAT_FILE`): proceso y runtime vivos, sin servidor HTTP |
 | Readiness | ninguna: es un consumidor *pull*, ningún Service le envía tráfico. El progreso se vigila con el lag del consumidor |
 | Métricas | empujadas por OTLP al colector; el procesador no abre puertos ([observabilidad](observabilidad.md)) |
@@ -22,7 +22,9 @@
 
 > [!WARNING]
 > La *liveness* **no** debe depender de ClickHouse ni NATS: una caída de la dependencia
-> reiniciaría todos los pods en cascada sin arreglar nada.
+> reiniciaría todos los pods en cascada sin arreglar nada. Con NATS o ClickHouse caídos el latido
+> sigue a propósito; un pipeline atascado se detecta por el lag. Configuración de cada probe:
+> [Kubernetes](kubernetes.md#probes).
 
 ## Gateway
 

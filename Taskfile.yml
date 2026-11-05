@@ -154,7 +154,7 @@ tasks:
       - >-
         helm --kube-context {{.CTX}} upgrade --install kube-prometheus-stack
         prometheus-community/kube-prometheus-stack -n monitoring --create-namespace
-        -f k8s/monitoring/kube-prometheus-stack-values.yaml --version 92.10.1 --wait
+        -f k8s/monitoring/kube-prometheus-stack-values.yaml --version 92.10.1 --wait --timeout 15m
 
   deploy:
     desc: Construye la imagen, la carga en `rtas`, aplica k8s/ y reinicia gateway y procesador
@@ -201,15 +201,20 @@ tasks:
   test:integration:cluster:
     desc: "Pruebas de integración contra NATS y ClickHouse del clúster (`task cluster:forward` en otra terminal)"
     preconditions:
+      - sh: '[ -z "$(docker compose --profile loadtest ps -q)" ]'
+        msg: "Docker Compose está arrancado: comparte la CPU (y los puertos 4222, 8123, 8222 y 9090) con el clúster y falsea el resultado. Páralo con `task env:down`."
       - sh: curl -sf http://127.0.0.1:8222/healthz > /dev/null
-        msg: "Falta el port-forward a NATS. Ejecuta `task cluster:forward` en otra terminal (y para Compose)."
+        msg: "Falta el port-forward a NATS. Ejecuta `task cluster:forward` en otra terminal."
       - sh: curl -sf http://127.0.0.1:8123/ping > /dev/null
-        msg: "Falta el port-forward a ClickHouse. Ejecuta `task cluster:forward` en otra terminal (y para Compose)."
+        msg: "Falta el port-forward a ClickHouse. Ejecuta `task cluster:forward` en otra terminal."
     cmds:
       - task: integration:run
 
   load:cluster:
     desc: "Job de k6 en `rtas`: escenario del README (RATE=2000 RAMP=5m HOLD=10m BATCH=10 por defecto; p. ej. task load:cluster BATCH=1)"
+    preconditions:
+      - sh: '[ -z "$(docker compose --profile loadtest ps -q)" ]'
+        msg: "Docker Compose está arrancado: comparte la CPU (y los puertos 4222, 8123, 8222 y 9090) con el clúster y falsea el resultado. Páralo con `task env:down`."
     vars:
       RATE: '{{.RATE | default "2000"}}'
       RAMP: '{{.RAMP | default "5m"}}'
@@ -225,6 +230,35 @@ tasks:
       - kubectl kustomize --load-restrictor LoadRestrictionsNone .task/load-cluster | {{.KUBECTL}} apply --server-side -f -
       - "{{.KUBECTL}} -n rtas wait --for=condition=ready pod -l job-name=k6 --timeout=180s"
       - "{{.KUBECTL}} -n rtas logs -f job/k6"
+
+  load:cluster:external:
+    desc: "k6 FUERA del clúster (contenedor de Docker en la red del nodo): escenario del README con 1 evento por petición (RATE=2000 RAMP=5m HOLD=10m BATCH=1 por defecto)"
+    preconditions:
+      - sh: '[ -z "$(docker compose --profile loadtest ps -q)" ]'
+        msg: "Docker Compose está arrancado: comparte la CPU (y los puertos 4222, 8123, 8222 y 9090) con el clúster y falsea el resultado. Páralo con `task env:down`."
+    vars:
+      RATE: '{{.RATE | default "2000"}}'
+      RAMP: '{{.RAMP | default "5m"}}'
+      HOLD: '{{.HOLD | default "10m"}}'
+      BATCH: '{{.BATCH | default "1"}}'
+      NODE_IP:
+        sh: docker inspect -f "{{`{{.NetworkSettings.Networks.rtas.IPAddress}}`}}" rtas
+    cmds:
+      # NodePorts temporales para gateway, ClickHouse, monitor de NATS y Prometheus; se borran al
+      # terminar aunque la prueba falle.
+      - "{{.KUBECTL}} apply -f loadtest/external/nodeports.yaml"
+      - defer: "{{.KUBECTL}} delete -f loadtest/external/nodeports.yaml --ignore-not-found"
+      # Así k6 no consume la CPU del nodo (`--cpus` de minikube): la del sistema queda para él.
+      - >-
+        docker run --rm --network rtas
+        -v "{{.ROOT_DIR}}/loadtest:/scripts:ro"
+        -e RATE={{.RATE}} -e RAMP={{.RAMP}} -e HOLD={{.HOLD}} -e BATCH={{.BATCH}}
+        -e GATEWAY_URL=http://{{.NODE_IP}}:30080
+        -e CLICKHOUSE_URL=http://{{.NODE_IP}}:30123 -e CLICKHOUSE_PASSWORD=clickhouse
+        -e NATS_MONITOR_URL=http://{{.NODE_IP}}:30222
+        -e K6_PROMETHEUS_RW_SERVER_URL=http://{{.NODE_IP}}:30090/api/v1/write
+        -e "K6_PROMETHEUS_RW_TREND_STATS=p(50),p(95),p(99),max"
+        grafana/k6:2.3.0 run -o experimental-prometheus-rw /scripts/k6.js
 
   cluster:clean:
     desc: Borra el namespace `rtas` (sistema y datos; la monitorización se queda)

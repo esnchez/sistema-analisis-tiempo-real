@@ -77,7 +77,8 @@ se publica sin `Nats-Msg-Id` y en ese caso la DLQ no es idempotente.
 
 ## Capacidad del backlog
 
-`23 MB/s × duración de la caída` → 1 h ≈ 83 GB · 24 h ≈ 2 TB.
+`23 MB/s × duración de la caída` → 1 h ≈ 83 GB · 24 h ≈ 2 TB (a 2 TB/día; cambios de retención y
+disco necesarios en la [extrapolación](../README.md#extrapolación-a-los-objetivos-del-readme)).
 
 > [!WARNING]
 > Con `retention=limits`, JetStream **descarta lo más antiguo** al llenarse. Dimensionar

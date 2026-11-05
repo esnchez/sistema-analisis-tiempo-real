@@ -12,5 +12,5 @@
 > en la DLQ (`invalid_event`) y se pueden reprocesar tras desplegar.
 
 > [!TIP]
-> En local, el esquema solo se aplica con el volumen vacío:
-> `docker compose down -v && docker compose up -d`.
+> En local, el esquema solo se aplica con el volumen vacío: `task env:reset`
+> ([entorno local](entorno-local.md#comandos)).

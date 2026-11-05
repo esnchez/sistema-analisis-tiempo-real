@@ -21,6 +21,8 @@ separado de otros clústeres locales. Manifiestos en `k8s/`.
 | `k8s/monitoring/` | valores del chart `kube-prometheus-stack`, alertas y dashboards (los incluye `k8s/`) |
 | `k8s/monitoring/grafana/dashboards/` | dashboards (Kubernetes; Compose reutiliza el de la prueba de carga) |
 | `loadtest/k8s/` | Job de k6 (script: `loadtest/k6.js`) |
+| `loadtest/external/` | NodePorts temporales para k6 fuera del clúster (`task load:cluster:external`) |
+| `loadtest/compose/` | Prometheus y Grafana de Docker Compose (no se usan en Kubernetes) |
 
 ## Puesta en marcha
 
@@ -31,10 +33,11 @@ Con Task: `task cluster:start`, `task monitoring:install` y `task deploy` (las t
 # 1. Clúster propio; --keep-context no cambia el contexto activo de kubectl
 minikube start -p rtas --driver=docker --cpus=4 --memory=6144 --keep-context
 
-# 2. Monitorización
+# 2. Monitorización (la primera vez descarga todas las imágenes: de ahí el timeout)
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
 helm --kube-context rtas upgrade --install kube-prometheus-stack \
   prometheus-community/kube-prometheus-stack -n monitoring --create-namespace \
-  -f k8s/monitoring/kube-prometheus-stack-values.yaml --version 92.10.1
+  -f k8s/monitoring/kube-prometheus-stack-values.yaml --version 92.10.1 --wait --timeout 15m
 
 # 3. Imagen del gateway y el procesador
 docker build -t rtas-processor:dev processor
@@ -49,6 +52,8 @@ Tras cambiar el código: repetir el paso 3 y
 `kubectl --context rtas -n rtas rollout restart deploy/processor deploy/gateway`.
 
 ## Acceder
+
+Con Task: `task grafana`, `task prometheus` y `task status`. Equivalentes:
 
 ```bash
 kubectl --context rtas -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80   # admin / admin
@@ -87,10 +92,8 @@ Unitarias, integración contra los servicios del clúster y el Job de k6, con su
 | clickhouse | `/ping` | `/ping` |
 | otel-collector | TCP `:4317` | TCP `:4317` |
 
-> [!NOTE]
-> El latido solo demuestra que el proceso y su runtime responden. Con NATS o ClickHouse
-> caídos sigue latiendo a propósito: reiniciar no arreglaría nada
-> ([despliegue](despliegue-y-escalado.md)). Un pipeline atascado se detecta por el lag.
+Por qué cada probe es así (y por qué la liveness no depende de NATS ni ClickHouse):
+[despliegue](despliegue-y-escalado.md#procesador).
 
 ## Recursos (clúster de 4 CPU / 6 GiB)
 
@@ -121,6 +124,10 @@ Problemas encontrados al montar el entorno y cómo se resolvieron.
 | Tras arrancar el nodo a mano: CoreDNS sin `Ready`, procesador y gateway en `CrashLoopBackOff` (`Temporary failure in name resolution`), operador de Prometheus caído | falta `control-plane.minikube.internal` en `/etc/hosts` del nodo: kube-proxy no llega al API server y no crea las reglas de los Services (`10.96.0.1` rechaza conexiones) | añadir la entrada antes de arrancar `kubelet` (lo hace `task cluster:start`) y reiniciar los pods afectados. **No borrar el pod `storage-provisioner`**: es un pod suelto y no se recrea (`minikube -p rtas addons enable storage-provisioner`) |
 | `minikube update-context` deja `rtas` como contexto activo | es su comportamiento | `task cluster:start` restaura el contexto anterior |
 | Docker Desktop deja de responder (`500 Internal Server Error` en toda la API) tras una prueba de carga larga | motor de Docker Desktop colgado | reiniciar Docker Desktop |
+| Crear el clúster desde cero falla: `prepare kic ssh: unable to execute icacls to set permissions` y luego `GUEST_NOT_FOUND` (2026-11-05) | justo después de crearse, `machines\rtas\id_rsa` queda bloqueado por otro proceso (el antivirus del equipo analizando una clave privada nueva); `icacls` sobre el mismo archivo funciona segundos después | `minikube delete -p rtas` y repetir el `start` |
+| `task monitoring:install` en un clúster nuevo: `Error: context deadline exceeded` y release `failed` | `helm --wait` espera 5 min por defecto y la primera instalación descarga todas las imágenes | `--timeout 15m` en la tarea; si ya falló, repetirla (la release pasa a `deployed`) |
+| Prueba de carga en el clúster con resultados mucho peores de lo esperado (2026-11-05) | `task load` deja Docker Compose arrancado y su pipeline, Prometheus y Grafana compiten por la CPU de la VM de Docker; además ocupan los puertos 4222, 8123, 8222 y 9090, y un `port-forward` al Prometheus del clúster falla en silencio | `task env:down` antes; `task load:cluster`, `task load:cluster:external` y `task test:integration:cluster` ahora lo comprueban |
+| Primer `task deploy`: gateway y procesador con 5–6 reinicios | arrancan antes que NATS y salen con error al no conectar; Kubernetes los reinicia hasta que NATS está listo | ninguna: se estabilizan solos en 1–2 min |
 | `minikube image build` falla: `failed to read dockerfile: open Dockerfile` | desde Windows envía un Dockerfile vacío (`transferring dockerfile: 2B`), con ruta relativa o absoluta | `docker build` en el host + `minikube image load` |
 | NATS en `CrashLoopBackOff`: `flag provided but not defined: -max_file_store` | el tope de disco de JetStream no existe como opción de línea de comandos | `k8s/config/nats.conf` con `jetstream { max_file_store }` |
 | Job de k6 en `CreateContainerConfigError: secret "clickhouse" not found` | kustomize añade un sufijo hash al Secret y la kustomization de `loadtest/k8s` no lo conoce | Secret con nombre fijo (`disableNameSuffixHash`) |
@@ -129,6 +136,9 @@ Problemas encontrados al montar el entorno y cómo se resolvieron.
 | Latencia del gateway p95 ≈ 0,7 s a solo 50 req/s (en Compose: 3 ms) | nodo al 99 % de CPU; NATS esperando CPU hasta el 36 % del tiempo (PSI). ClickHouse gastaba ~0,8 núcleos **sin carga** escribiendo sus tablas de log internas (3,3 M filas en `asynchronous_metric_log`, frente a 90 k eventos) | `k8s/config/clickhouse-system-logs.xml` desactiva esas tablas; ClickHouse con límite de 2 CPU; NATS con petición de 500m |
 
 ## Limpiar
+
+Con Task: `task cluster:stop` (para el clúster y conserva todo) o `task cluster:clean` (borra el
+namespace `rtas`, con confirmación). Equivalentes:
 
 ```bash
 kubectl --context rtas delete namespace rtas   # sistema y datos (PVC)

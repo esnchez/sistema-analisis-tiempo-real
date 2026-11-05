@@ -30,8 +30,8 @@ spec:
         app.kubernetes.io/name: processor
     spec:
       automountServiceAccountToken: false
-      # > antigüedad máx. de lote + timeout de INSERT + margen: la parada ordenada termina
-      # los lotes en curso antes del SIGKILL.
+      # > antigüedad máx. de lote (2 s) + INSERT con sus reintentos (~7,5 s) + margen: la parada
+      # ordenada termina los lotes en curso antes del SIGKILL.
       terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true

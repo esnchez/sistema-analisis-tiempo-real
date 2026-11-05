@@ -26,7 +26,7 @@ pub struct NatsConfig {
     /// Plazo para confirmar un mensaje antes de que se reentregue. Debe superar con holgura
     /// [`PipelineConfig::max_hold_time`](crate::infrastructure::pipeline::PipelineConfig::max_hold_time).
     pub ack_wait: Duration,
-    /// Mensajes sin confirmar en toda la flota. Debe ser ≥ réplicas × filas por lote × (K + 1).
+    /// Mensajes sin confirmar en toda la flota. Debe ser ≥ réplicas × filas por lote × (K + 3).
     pub max_ack_pending: i64,
     /// Mensajes por petición de pull.
     pub fetch_batch: usize,

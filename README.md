@@ -73,15 +73,8 @@ task status               # pods
 task grafana              # http://localhost:3000 (admin / admin), dashboard *RTAS · Pipeline en tiempo real*
 ```
 
-Pruebas:
-
-```bash
-task test                       # unitarias
-task lint                       # formato y clippy
-task test:integration           # integración contra NATS y ClickHouse de Docker Compose
-task cluster:forward            # (otra terminal) port-forwards a NATS y ClickHouse del clúster
-task test:integration:cluster   # integración contra el clúster
-```
+Pruebas: `task test`, `task lint` y `task test:integration`; todas las tareas de prueba y sus
+comandos equivalentes en [docs/operaciones/pruebas.md](docs/operaciones/pruebas.md#con-task).
 
 Para desarrollo rápido sin Kubernetes: `task env:up`
 ([entorno con Docker Compose](docs/operaciones/entorno-local.md)).
@@ -132,17 +125,18 @@ Para realizar pruebas de carga utilizaremos k6.
 2. Ejecuta el script de carga (k6 publica eventos por HTTP en el gateway de ingesta). En el
    clúster de pruebas, como Job de Kubernetes, o con Docker Compose:
 ```bash
-task load:cluster BATCH=1   # Job de k6 en `rtas` (RATE, RAMP, HOLD y BATCH se pueden cambiar)
-task load                   # Compose, con volúmenes limpios (BATCH=1 por defecto)
-task load:smoke             # humo en Compose, ~40 s
+task load:cluster:external  # en el clúster, con k6 fuera de él (recomendado)
+task load                   # en Docker Compose
 ```
+   Otras variantes (Job de k6 dentro del clúster, humo, parámetros):
+   [docs/operaciones/pruebas.md](docs/operaciones/pruebas.md#con-task).
 
 3. Observa los resultados utilizando Prometheus y Grafana:
    - k6 envía sus métricas a Prometheus (remote write) junto con las del pipeline (lag de NATS, eventos guardados, frescura, DLQ)
-   - Dashboard provisionado en Grafana: <http://localhost:3000>, *Prueba de carga · pipeline de extremo a extremo* (carpeta *Pruebas de carga* en Compose, *General* en Kubernetes)
+   - Dashboard provisionado en Grafana *Prueba de carga · pipeline de extremo a extremo* ([dónde](docs/operaciones/kubernetes.md#acceder))
    - Al terminar, k6 concilia lo aceptado con lo guardado en ClickHouse y la DLQ
 
-El script de prueba de carga se encuentra en `loadtest/k6.js`. Detalle y resultados: [docs/operaciones/pruebas.md](docs/operaciones/pruebas.md). Documentación técnica: [docs/](docs/README.md).
+El script de prueba de carga se encuentra en `loadtest/k6.js`. Detalle de cada ejecución: [docs/operaciones/pruebas.md](docs/operaciones/pruebas.md). Conclusiones y extrapolación a estas métricas: [docs/README.md](docs/README.md#resultados-y-extrapolación-a-los-objetivos-del-readme).
 
 ## Métricas objetivo
 

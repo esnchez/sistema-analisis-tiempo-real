@@ -8,16 +8,92 @@ Todas las pruebas del sistema, cómo se ejecutan y qué dieron:
 | Integración | adaptadores contra NATS y ClickHouse reales, marcadas `#[ignore]` | `processor/tests/integration/` |
 | Carga de extremo a extremo | k6 → gateway → NATS → procesador → ClickHouse, con conciliación | `loadtest/` |
 
-## Última ejecución completa (2026-11-02)
+Resumen y extrapolación a los objetivos del README: [docs/README](../README.md#resultados-y-extrapolación-a-los-objetivos-del-readme).
+
+## Ejecución del 2026-11-05
+
+Pipeline completo con Task sobre un clúster `rtas` recreado desde cero. El portátil tenía la CPU
+muy cargada por otros procesos (antivirus, navegador, editor; 1,6 de 32 GB libres): k6 gastaba el
+**doble de CPU por petición** que el 2026-11-02, así que las latencias y req/s absolutos son
+peores; la CPU por unidad de trabajo se usa para la [extrapolación](../README.md#coste-medido-por-componente).
+
+| Prueba | Entorno | Resultado |
+|---|---|---|
+| `task lint` · `task test` | portátil | ✅ sin avisos · 63 / 63 |
+| `task test:integration` | Docker Compose | ✅ 5 / 5 |
+| `task test:integration:cluster` | Kubernetes (`rtas`) | ✅ 5 / 5 |
+| `task load` (README, 1 evento, 15 min) con el clúster en pausa | Docker Compose | ⚠️ 1 559 req/s de media, p95 266 ms ❌, **0 errores**, conciliación ✅ 1 364 510 → 1 364 510 · DLQ 13 909 → 13 909 |
+| `task load:cluster BATCH=1` (README, 15 min) | Kubernetes | ⚠️ 1 063 req/s en meseta, p95 436 ms ❌, **0 errores**, conciliación ✅ 861 147 → 861 147 · DLQ 8 567 → 8 567 |
+| `task load:cluster RATE=800 BATCH=10 RAMP=1m HOLD=5m` (eventos) | Kubernetes | ⚠️ 450 req/s = **4 400 eventos/s**, p95 1,6 s ❌, 0,8 % de `503`, conciliación **FALLO** con eventos *de más* (ver abajo) |
+| mismo escenario, k6 con reintentos ante `503` | Kubernetes | ⚠️ 396 req/s = 3 840 eventos/s, p95 1,7 s ❌, **0 errores**, conciliación ✅ 1 401 596 → 1 401 596 · DLQ 14 054 → 14 054 |
+
+Recursos medidos en Prometheus durante las mesetas (núcleos consumidos; espera de CPU entre paréntesis):
+
+| Pod | README, 1 063 req/s × 1 | Eventos, 4 386 eventos/s |
+|---|---|---|
+| k6 | 1,77 (64 %) | 1,59 (64 %) |
+| gateway ×2 | 0,21 cada uno (30 %) | 0,16 cada uno (25 %) |
+| processor ×2 | 0,07 cada uno (14 %) · 15 MiB | 0,12 cada uno (20 %) · 43 MiB |
+| nats | 0,29 (39 %) · 183 MiB | 0,47 (47 %) · 494 MiB |
+| clickhouse | 0,44 (51 %) · 376 MiB | 0,62 (55 %) · 374 MiB |
+| lote medio / INSERT p99 / frescura p99 | 1 058 filas / 2,3 s / 4,3 s | 4 714 filas / 2,5 s / 8,9 s |
+
+ClickHouse tras las pruebas: 4,46 M filas, 228 MiB comprimidos (797 MiB sin comprimir, ratio 3,5),
+**54 B por fila** frente a 524 B de JSON por evento. Consultas analíticas medidas en
+[docs/README](../README.md#consultas-analíticas-objetivo-de-500-ms).
+
+### k6 fuera del clúster (2026-11-05)
+
+`task load:cluster:external`: k6 como contenedor de Docker en la red del nodo, contra NodePorts
+temporales (`loadtest/external/nodeports.yaml`), para que no consuma la CPU del nodo. Escenario del
+README con 1 evento por petición, 20:31–20:47 UTC, Chrome cerrado.
+
+| Métrica | k6 dentro (mismo día) | **k6 fuera** |
+|---|---|---|
+| req/s en meseta | 1 063 | **1 938** (97 % del objetivo) |
+| Iteraciones descartadas por k6 | 41 % | 4 % |
+| p95 / p99 (k6) | 436 / 801 ms | **276 / 553 ms** ❌ |
+| p95 / p99 (gateway) | 369 / 500 ms | 246 / 476 ms |
+| Errores | 0 | **0** (1 461 306 peticiones, 28 420 reintentos de cliente) |
+| Conciliación | ✅ | ✅ 1 417 822 → 1 417 822 · DLQ 14 385 → 14 385 |
+| Lag máx. / reentregas / frescura p99 | 66 / 0 / 4,3 s | 102 / 0 / 3,0 s |
+
+Recursos en la meseta:
+
+| Qué | CPU | Espera de CPU | Memoria máx. |
+|---|---|---|---|
+| gateway ×2 | 0,43 cada uno | 21 % | 42 MiB |
+| processor ×2 | 0,13 cada uno | 9 % | 45 MiB |
+| nats | 0,57 | 26 % | 301 MiB |
+| clickhouse | 0,53 | 21 % | 584 MiB |
+| **pods del sistema** | **2,2** | | |
+| contenedor del nodo `rtas` (`docker stats`, incluye Kubernetes, Prometheus y Grafana) | 3,0–4,7 (límite 4) | 36 % de periodos con *throttling* desde su creación | 3,7 GiB de 6 |
+| contenedor de k6 | **3–5** | | |
+
+El nodo y k6 juntos usan ~7,5–9 núcleos de los 8 hilos del portátil (i5-9400H, 4 núcleos
+físicos): por eso no se subió minikube a 6 CPU ([conclusión](../README.md#por-qué-falla-el-p99-en-local)).
+
+**La conciliación `FALLO` de la prueba de eventos**: 1 180 peticiones (0,8 %) recibieron `503`
+porque NATS, sin CPU, no confirmó a tiempo (el gateway registró exactamente 1 180 avisos `no se
+pudieron publicar los eventos` y errores de E/S del cliente NATS). Parte de esos lotes ya estaba en
+JetStream, así que ClickHouse tenía 4 310 eventos válidos y la DLQ 36 **más** de los que k6 contaba
+como aceptados: ni pérdidas ni duplicados, sino lotes que el cliente no reenvió pese a lo que pide
+el [contrato del gateway](../servicio/gateway.md#reintentos-del-cliente). k6 ahora los reenvía
+(`MAX_503_RETRIES`, ver [variables](#ejecutar-en-docker-compose)).
+
+Una primera ejecución de `task load:cluster BATCH=1` se descartó porque Docker Compose seguía
+arrancado ([Hallazgos](kubernetes.md#hallazgos)).
+
+## Ejecución del 2026-11-02
 
 | Prueba | Entorno | Resultado |
 |---|---|---|
 | Unitarias (`task test`) | portátil, sin servicios | ✅ 63 / 63 |
 | Formato y clippy (`task lint`) | portátil | ✅ sin avisos |
 | Integración (`--ignored`) | Docker Compose | ✅ 5 / 5: esquema de ClickHouse, reintento sin duplicar, gateway descarta reintentos, DLQ idempotente con reentrega, pipeline completo NATS → ClickHouse + DLQ |
-| Carga README (2 000 req/s × 1 evento, 15 min) | Docker Compose | ✅ ver [resultados](#resultados-en-docker-compose-portátil-docker-con-8-vcpu--16-gb) |
+| Carga README (2 000 req/s × 1 evento, 15 min) | Docker Compose | ✅ [resultados](#resultados-en-docker-compose-portátil-docker-con-8-vcpu--16-gb) |
 | Integración (`task test:integration:cluster`) | Kubernetes (`rtas`) | ✅ 5 / 5 |
-| Carga README (`task load:cluster BATCH=1`) | Kubernetes (`rtas`, 4 CPU, k6 dentro) | ⚠️ conciliación exacta y 0 errores, pero p99 299 ms > 200 ms y 1 870 req/s en meseta: CPU del clúster saturada, ver [resultados](#resultados-en-kubernetes-minikube-rtas-4-cpu--6-gib-k6-dentro-del-clúster) |
+| Carga README (`task load:cluster BATCH=1`) | Kubernetes (`rtas`, 4 CPU, k6 dentro) | ⚠️ [resultados](#resultados-en-kubernetes-minikube-rtas-4-cpu--6-gib-k6-dentro-del-clúster) |
 
 ## Con Task
 
@@ -27,9 +103,10 @@ Todas las pruebas del sistema, cómo se ejecutan y qué dieron:
 | `task lint` | `cargo fmt --check` + `cargo clippy -D warnings` |
 | `task test:integration` | integración contra NATS y ClickHouse de Compose (los arranca) |
 | `task cluster:forward` + `task test:integration:cluster` | integración contra el clúster (port-forwards en otra terminal; Compose parado) |
-| `task load:smoke` | humo en Compose |
+| `task load:smoke` | humo en Compose (~40 s) |
 | `task load` | escenario del README en Compose con volúmenes limpios (`BATCH=1` por defecto) |
 | `task load:cluster` | Job de k6 en `rtas`; `RATE`, `RAMP`, `HOLD` y `BATCH` como variables (`task load:cluster BATCH=1`) |
+| `task load:cluster:external` | k6 fuera del clúster, en un contenedor de Docker contra NodePorts temporales: no consume la CPU del nodo (`BATCH=1` por defecto) |
 
 Los comandos equivalentes están debajo.
 
@@ -87,6 +164,7 @@ Grafana: <http://localhost:3000> → carpeta *Pruebas de carga* (anónimo, solo 
 | `BATCH` | `10` | eventos por petición (SDK que agrupa) |
 | `INVALID_RATE` | `0.01` | eventos erróneos u obsoletos (→ DLQ) |
 | `RETRY_RATE` | `0.02` | peticiones que el cliente repite (no deben duplicar) |
+| `MAX_503_RETRIES` | `3` | reenvíos de un lote respondido con `503` |
 | `GATEWAY_URL`, `CLICKHOUSE_URL`, `CLICKHOUSE_PASSWORD`, `NATS_MONITOR_URL` | `localhost` (`:8080`, `:8123`, `:8222`); Compose y el Job los apuntan a los servicios | a dónde envía y de dónde concilia |
 | `NATS_STREAM`, `NATS_CONSUMER`, `NATS_DLQ_STREAM` | `EVENTS`, `processor`, `EVENTS_DLQ` | qué stream y consumidor observa |
 
@@ -101,9 +179,10 @@ kubectl kustomize --load-restrictor LoadRestrictionsNone loadtest/k8s \
 kubectl --context rtas -n rtas logs -f job/k6        # al final: conciliación OK / FALLO
 ```
 
-El escenario (`RATE`, `RAMP`, `HOLD`, `BATCH`) se cambia en `loadtest/k8s/k6-job.yaml`.
-Si se cruza un threshold (p. ej. p99 > 200 ms) k6 sale con error y el Job queda `Failed`;
-el resultado completo está en los logs. Dashboard en Grafana: **Prueba de carga · pipeline de extremo a extremo**, en la carpeta *General* (la carpeta *Pruebas de carga* solo existe en Compose).
+El escenario por defecto (`RATE`, `RAMP`, `HOLD`, `BATCH`) está en `loadtest/k8s/k6-job.yaml`;
+`task load:cluster` lo cambia con variables sin tocar el archivo. Si se cruza un threshold
+(p. ej. p99 > 200 ms) k6 sale con error y el Job queda `Failed`; el resultado completo está en los
+logs y en el dashboard de la prueba de carga ([Grafana](kubernetes.md#acceder)).
 
 > [!CAUTION]
 > No cambiar el clúster (rollouts, reinicios de ClickHouse) mientras corre una prueba: la
@@ -116,8 +195,9 @@ el resultado completo está en los logs. Dashboard en Grafana: **Prueba de carga
 |---|---|---|
 | Latencia del gateway | threshold `http_req_duration{scenario:clients}` | p99 < 200 ms (README) |
 | Errores | threshold `http_req_failed{scenario:clients}` | < 0,1 % (README) |
-| **Conciliación** | `handleSummary`: aceptados válidos = `uniqExact(event_id)` en ClickHouse · aceptados erróneos = mensajes nuevos en la DLQ | igualdad exacta: ni pérdidas ni duplicados |
+| **Conciliación** | `handleSummary`: aceptados válidos = `uniqExact(event_id)` en ClickHouse · aceptados erróneos = mensajes nuevos en la DLQ | igualdad exacta (ni pérdidas ni duplicados), salvo los eventos sin confirmar de la fila siguiente |
 | Checks de respuesta | threshold `checks{scenario:clients}` | > 99,9 % de respuestas `202` |
+| Reintentos tras `503` | como un cliente real: espera `Retry-After` y reenvía el lote (hasta `MAX_503_RETRIES`, 3); métrica `retries_after_503` | lo no confirmado tras los reintentos cuenta como "sin confirmar" y la conciliación lo admite guardado o no |
 | Lag, reentregas, frescura | escenario `observer` → métricas `k6_pipeline_*` en Prometheus | lag que no crece; reentregas = 0 |
 
 > [!NOTE]
@@ -160,15 +240,9 @@ Detalle de la ejecución completa del 2026-11-02 (`runId=mvztilxh`, 22:15–22:3
 > k6 en Docker sobre Windows registra algunas duraciones mínimas negativas por saltos del reloj
 > de la VM; no afectan a los percentiles.
 
-> [!IMPORTANT]
-> **El límite en local es la CPU compartida, no el pipeline.** Con 10 eventos por petición,
-> k6 consume 3–5 de los 8 vCPU generando JSON, ClickHouse 2–3 y NATS 1; el procesador apenas
-> ~0,4 núcleos y sin lag sostenido. Para medir la capacidad real hay que ejecutar k6 en otra
-> máquina (o k6 Cloud) y dar recursos propios a cada servicio.
-
-> [!TIP]
-> La frescura (~2 s) es la antigüedad máxima del lote (`PIPELINE_BATCH_AGE_MS`): baja ese
-> valor si necesitas datos antes, a costa de lotes más pequeños.
+Con 10 eventos por petición, k6 consume 3–5 de los 8 vCPU generando JSON, ClickHouse 2–3 y NATS 1;
+el procesador apenas ~0,4 núcleos y sin lag sostenido. La frescura (~2 s) es la antigüedad máxima
+del lote ([concurrencia](../servicio/concurrencia.md#parámetros-de-ajuste-en-este-orden)).
 
 ## Resultados en Kubernetes (minikube `rtas`, 4 CPU / 6 GiB, k6 dentro del clúster)
 
@@ -197,22 +271,15 @@ Prometheus durante la meseta de 10 min):
 - Lotes de ~5 000 filas (p99): con ~900 eventos/s por pod el lote se corta por antigüedad (2 s), no
   por tamaño. `INSERT` p99 1,26 s, inflado por la espera de CPU de ClickHouse.
 - Los pods suman ~3,4 de los 4 núcleos y todos esperan CPU: el límite es el nodo, no el
-  pipeline. El procesador usa 0,09 núcleos y 13 MiB, frente a los 768 Mi de su límite
-  ([memoria](../servicio/memoria.md)).
+  pipeline.
 
 "Antes de los ajustes": ClickHouse escribiendo sus tablas de log internas y NATS con 100m de
 CPU (ver *Hallazgos* en [Kubernetes](kubernetes.md)). Entre ambas ejecuciones también se paró
 otro clúster de minikube que compartía la CPU del host.
 
-> [!IMPORTANT]
-> **Con 2 000 req/s el límite vuelve a ser la CPU compartida, no el pipeline.** El nodo llegó
-> al 98 %: k6 ~1,9 núcleos, ClickHouse ~1,1, NATS ~0,4, cada gateway ~0,26 y cada procesador
-> solo ~0,1. Todos esperaron CPU (PSI: k6 70 %, ClickHouse 65 %, NATS 41 %, gateways 34 %).
-> El procesador no falló ni un INSERT, el circuit breaker no se abrió y no hubo reentregas:
-> la conciliación fue exacta con 911 000 peticiones y 17 933 reintentos de cliente.
-
-Para medir la capacidad real: k6 fuera del clúster (otra máquina o k6 Cloud) contra el
-gateway expuesto, o más CPU para el nodo (`minikube start --cpus`).
+En la ejecución de ~1 500 req/s (tercera fila; 911 000 peticiones, 17 933 reintentos de cliente)
+el nodo llegó al 98 % de CPU, ClickHouse gastó ~1,1 núcleos y la espera de CPU subió al 65–70 %;
+aun así el procesador no falló ningún INSERT, el circuit breaker no se abrió y no hubo reentregas.
 
 ## Por qué k6 → gateway y no k6 → NATS
 

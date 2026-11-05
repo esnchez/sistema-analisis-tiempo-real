@@ -35,7 +35,7 @@ Cómo un único proceso consume más mensajes de forma segura. Código: `infrast
 | Etapa | Archivo | Paralelismo | Corte / límite |
 |---|---|---|---|
 | intake | `intake.rs` + `nats/source.rs` | 1 tarea | el consumidor *pull* pide lotes fijos de `NATS_FETCH_BATCH` (1 000) y solo vuelve a pedir cuando se consumen; el canal de entrada (10 000 eventos) llena ⇒ deja de consumir |
-| batcher | `batcher.rs` | 1 tarea | **filas ≥ 50k · bytes ≥ 32 MB · antigüedad ≥ 2 s** (lo primero) |
+| batcher | `batcher.rs` | 1 tarea | por **filas, bytes o antigüedad**, lo primero que se alcance ([parámetros](#parámetros-de-ajuste-en-este-orden)) |
 | writers | `writer.rs` | K tareas (`Semaphore`) | cada una = 1 comando `RecordEvents` |
 | ack | `writer.rs` | dentro del writer | tras `INSERT` OK |
 
@@ -55,7 +55,7 @@ Cómo un único proceso consume más mensajes de forma segura. Código: `infrast
 | Reintentos ocupan un writer | deseado: K reintentando ⇒ backpressure natural; *circuit breaker* para fallar rápido |
 | El reintento necesita el lote | `RecordEvents { events: Arc<[SourceEvent]> }`: clon barato y lote idéntico |
 | `panic` en una tarea | `JoinSet` lo reporta; sin ack ⇒ reentrega ⇒ dedup. `processor.writers.busy` baja igualmente (guard `BatchInProgress`) |
-| SIGTERM pierde un lote | parar fetch → cerrar lote → cada writer inserta y hace ack dentro de su tarea → esperar `JoinSet` → salir. Los mensajes del *prefetch* aún no procesados se sueltan sin `nak`: NATS los reentrega tras *AckWait* |
+| SIGTERM pierde un lote | `CancellationToken`: cada etapa termina su trabajo antes de salir ([orden de parada](../operaciones/despliegue-y-escalado.md#procesador)) |
 | Más pods ⇒ demasiados INSERT/s | escalar **tamaño de lote**, no K |
 
 > [!WARNING]
@@ -69,7 +69,7 @@ Cómo un único proceso consume más mensajes de forma segura. Código: `infrast
 | 1 | tamaño / antigüedad del lote | `PIPELINE_BATCH_ROWS` (50 000) · `PIPELINE_BATCH_BYTES` (32 MiB) · `PIPELINE_BATCH_AGE_MS` (2 000) | rendimiento ↔ frescura |
 | 2 | K writers | `PIPELINE_WRITERS` (2) | subir solo si domina la latencia de INSERT |
 | 3 | capacidad del canal de entrada | `PipelineConfig::channel_capacity` (10 000, solo en código) | lo justo para que no esperen los writers |
-| 4 | *MaxAckPending* | `NATS_MAX_ACK_PENDING` | ≥ pods × filas_lote × (K + 3) |
+| 4 | *MaxAckPending* | `NATS_MAX_ACK_PENDING` | ver [topología](topologia-nats.md#configuración) |
 
 Entre pods: todos comparten el **mismo consumidor durable**. Escalar fuera = añadir réplicas
 ([despliegue](../operaciones/despliegue-y-escalado.md)).

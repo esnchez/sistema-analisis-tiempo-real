@@ -1,0 +1,76 @@
+# Puertos del nodo de minikube para k6 fuera del clúster (`task load:cluster:external`).
+#
+# k6 corre como contenedor de Docker en la red `rtas` (la del nodo) y llega a estos servicios por
+# <IP del nodo>:<nodePort>, sin `kubectl port-forward` (un proxy de una sola conexión que no
+# aguanta 2 000 req/s). Solo existen mientras dura la prueba: la tarea los borra al terminar.
+apiVersion: v1
+kind: Service
+metadata:
+  name: k6-external-gateway
+  namespace: rtas
+  labels:
+    app.kubernetes.io/part-of: rtas-loadtest
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30080
+---
+# Conciliación y observador: consultas ligeras a ClickHouse.
+apiVersion: v1
+kind: Service
+metadata:
+  name: k6-external-clickhouse
+  namespace: rtas
+  labels:
+    app.kubernetes.io/part-of: rtas-loadtest
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+      nodePort: 30123
+---
+# Observador: /jsz de NATS (lag, acks pendientes, DLQ).
+apiVersion: v1
+kind: Service
+metadata:
+  name: k6-external-nats-monitor
+  namespace: rtas
+  labels:
+    app.kubernetes.io/part-of: rtas-loadtest
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: nats
+  ports:
+    - name: monitor
+      port: 8222
+      targetPort: 8222
+      nodePort: 30222
+---
+# Remote write de las métricas de k6 al Prometheus del kube-prometheus-stack.
+apiVersion: v1
+kind: Service
+metadata:
+  name: k6-external-prometheus
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: rtas-loadtest
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: prometheus
+    operator.prometheus.io/name: kube-prometheus-stack-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+      nodePort: 30090

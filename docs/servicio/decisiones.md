@@ -8,7 +8,7 @@ es común a todo el proyecto; las decisiones de operación están en
 |---|---|---|---|
 | 1 | Arquitectura hexagonal | infraestructura intercambiable y testeable con fakes | [visión general](arquitectura.md) |
 | 2 | CQS: comando + handler, sin datos de vuelta | escritura separada de lectura | [visión general](arquitectura.md) |
-| 3 | Gateway HTTP delante de NATS | punto de entrada real de los clientes; k6 lo prueba con HTTP nativo | [gateway](gateway.md) |
+| 3 | Gateway HTTP delante de NATS | punto de entrada real de los clientes | [gateway](gateway.md) |
 | 4 | El gateway no valida contenido | los clientes envían datos erróneos u obsoletos; la validación vive en un solo sitio | [gateway](gateway.md) |
 | 5 | At-least-once + dedup en 4 capas | "efectivamente una vez" sin transacciones entre NATS y ClickHouse | [garantías](garantias-de-entrega.md) |
 | 6 | Comando por **lote** | ClickHouse rinde con inserciones grandes | [concurrencia](concurrencia.md) |

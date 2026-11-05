@@ -7,7 +7,7 @@ use crate::infrastructure::env::{EnvError, parse_or};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GatewayConfig {
     pub listen_addr: SocketAddr,
-    /// Tamaño máximo del cuerpo. Por debajo del `max_payload` de NATS (1 MiB por defecto),
+    /// Tamaño máximo del cuerpo. No supera el `max_payload` de NATS (1 MiB por defecto),
     /// así ningún evento individual puede superarlo.
     pub max_body_bytes: usize,
     /// Eventos máximos por petición.
